@@ -20,6 +20,8 @@ from coldchain.enums import Layer, TableName
 from coldchain.io import layer_dir, read_table
 from coldchain.schemas import ISO_TIMESTAMP_FORMAT, split_list
 
+pytestmark = pytest.mark.slow
+
 runner = CliRunner()
 
 

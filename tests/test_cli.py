@@ -72,6 +72,7 @@ def test_generate_writes_fifty_shipments_with_one_logger_each(generated: Path) -
     assert sorted(loggers["logger_id"]) == sorted("LOG-" + ships["shipment_id"] + "-01")
 
 
+@pytest.mark.slow
 def test_generate_is_byte_identical_on_rerun(tmp_path: Path, generated: Path) -> None:
     assert _generate(tmp_path).exit_code == 0
     for layer in ("raw", "ground_truth"):
@@ -80,12 +81,14 @@ def test_generate_is_byte_identical_on_rerun(tmp_path: Path, generated: Path) ->
             assert again.read_bytes() == path.read_bytes(), path
 
 
+@pytest.mark.slow
 def test_seed_option_changes_output(tmp_path: Path, generated: Path) -> None:
     assert _generate(tmp_path, "--seed", "7").exit_code == 0
     other = (tmp_path / "starter" / "raw" / "shipments.csv").read_bytes()
     assert other != (generated / "shipments.csv").read_bytes()
 
 
+@pytest.mark.slow
 def test_config_option_uses_the_given_file(tmp_path: Path, raw_config: dict) -> None:
     raw_config["scales"]["starter"]["shipments"] = 12
     path = tmp_path / "custom.yaml"

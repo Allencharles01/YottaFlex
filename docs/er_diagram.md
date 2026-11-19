@@ -242,6 +242,7 @@ erDiagram
         string expected_status
         string expected_reason_codes
         string expected_excursion_durations_min
+        int idle_min "pairs only"
     }
 ```
 

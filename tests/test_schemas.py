@@ -75,6 +75,7 @@ def test_empty_table_passes(valid_tables, table) -> None:
     schemas.validate(table, valid_tables[table].iloc[0:0])
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("table", "column"), _all_columns("enum"))
 def test_bad_enum_rejected(valid_tables, table, column) -> None:
     frame = valid_tables[table]
@@ -82,6 +83,7 @@ def test_bad_enum_rejected(valid_tables, table, column) -> None:
     assert_fails(table, frame, column)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("table", "column"), _all_columns("id"))
 def test_malformed_id_rejected(valid_tables, table, column) -> None:
     frame = valid_tables[table]
@@ -89,6 +91,7 @@ def test_malformed_id_rejected(valid_tables, table, column) -> None:
     assert_fails(table, frame, column)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("table", "column"), _all_columns(required=True))
 def test_null_in_required_field_rejected(valid_tables, table, column) -> None:
     frame = valid_tables[table]
@@ -530,6 +533,27 @@ def test_anomaly_spanning_two_shipments(valid_tables) -> None:
     frame = valid_tables[TableName.ANOMALIES]
     second = frame.assign(shipment_id="SHP-2026-000002")
     schemas.validate(TableName.ANOMALIES, pd.concat([frame, second], ignore_index=True))
+
+
+def test_anomaly_idle_min_only_on_back_to_back_pairs(valid_tables) -> None:
+    frame = valid_tables[TableName.ANOMALIES]
+    pair = frame.assign(
+        issue_type="excursion_across_unrelated_shipments",
+        removed_record_ids=pd.Series([None], dtype="str"),
+        expected_status="COMPLIANT_WITH_WARNINGS",
+        expected_reason_codes="EXCURSION_WITHIN_ALLOWANCE",
+        idle_min=pd.array([75], dtype="Int64"),
+    )
+    schemas.validate(TableName.ANOMALIES, pair)
+    assert_fails(
+        TableName.ANOMALIES, pair.assign(idle_min=pd.array([None], dtype="Int64")), "idle_min"
+    )
+    assert_fails(
+        TableName.ANOMALIES, frame.assign(idle_min=pd.array([75], dtype="Int64")), "idle_min"
+    )
+    assert_fails(
+        TableName.ANOMALIES, pair.assign(idle_min=pd.array([-1], dtype="Int64")), "idle_min"
+    )
 
 
 def test_anomaly_affected_ids_must_be_valid(valid_tables) -> None:

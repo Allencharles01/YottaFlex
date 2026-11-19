@@ -213,9 +213,9 @@ def test_designed_segment_ramps_and_hump(app_config) -> None:
     loggers, context, segments = _one_segment(ramp_before=2, ramp_after=3)
     bands = readings._bands(context, 0.05)  # safe band [2.55, 7.45]; excursion [8.55, 11.95]
     natural = np.full(len(context), 5.0)
-    rngs = {"excursions": np.random.default_rng(3)}
+    rng = np.random.default_rng(3)
     rows, values = readings._designed_values(
-        app_config, loggers, context, segments, bands, natural, np.zeros(len(context)), rngs
+        app_config, loggers, context, segments, bands, natural, np.zeros(len(context)), rng
     )
     by_row = dict(zip(rows.tolist(), values.tolist(), strict=True))
     assert sorted(by_row) == list(range(8, 16))  # 2 ramp + 3 designed + 3 ramp readings
@@ -239,7 +239,7 @@ def test_absolute_reading_is_the_peak(app_config) -> None:
         bands,
         np.full(len(context), 5.0),
         np.zeros(len(context)),
-        {"excursions": np.random.default_rng(1)},
+        np.random.default_rng(1),
     )
     by_row = dict(zip(rows.tolist(), values.tolist(), strict=True))
     assert by_row[12] > 12.0  # beyond abs_max_c
@@ -258,7 +258,7 @@ def test_overlapping_ramps_are_rejected(app_config) -> None:
             readings._bands(context, 0.05),
             np.full(len(context), 5.0),
             np.zeros(len(context)),
-            {"excursions": np.random.default_rng(1)},
+            np.random.default_rng(1),
         )
 
 

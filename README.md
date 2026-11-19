@@ -5,7 +5,7 @@ shipments, loggers, 10-minute temperature readings, custody handoffs), injects l
 and checks per shipment whether it stayed compliant, tracing every conclusion back to specific
 readings and policies. All data is 100% synthetic.
 
-> Status: Phase 4 (compliance engine). See `docs/PROJECT_PLAN.md` for the full plan.
+> Status: Phase 5 (edge-case injection and ground truth). See `docs/PROJECT_PLAN.md` for the full plan.
 
 ## Quick start
 
@@ -13,8 +13,9 @@ readings and policies. All data is 100% synthetic.
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 coldchain version
-pytest
+pytest                                      # full suite; `pytest -m "not slow"` for a fast dev run
 coldchain generate --scale starter          # writes output/starter/{raw,ground_truth}/*.parquet + *.csv
+coldchain inject --scale starter            # injects the 5 labelled edge cases (optional step)
 coldchain check --scale starter             # reads raw/ only, writes output/starter/compliance/
 ```
 
@@ -26,6 +27,16 @@ shipment status events) into `raw/`, and the answer key `expected_outcomes` (the
 of every shipment and its expected status, reason codes and excursion windows, derived from
 `docs/compliance_rules.md`) into `ground_truth/`, together with `device_truth` (each device's
 hidden systematic offset; never read by the compliance engine).
+
+`coldchain inject` options: `--scale`, `--seed`, `--config`, `--output-dir` (as above). It
+injects the five edge cases of [`docs/anomaly_catalogue.md`](docs/anomaly_catalogue.md) into
+about 1 % of the shipments each (disjoint NORMAL, COMPLIANT shipments chosen by the seeded RNG,
+at least one of each type). The first run copies the clean generator output to
+`baseline/{raw,ground_truth}/`; every run starts from that snapshot, so re-running it gives the
+same result. It rewrites `raw/` (only the target shipments' records change; diff against
+`baseline/raw/` to see exactly which), updates `ground_truth/expected_outcomes` and writes
+`ground_truth/anomalies.{parquet,csv,json}` (one row per affected shipment). Running `generate`
+again removes the stale snapshot and anomaly list.
 
 `coldchain check` options: `--scale`, `--config`, `--output-dir` (as above). It runs the
 compliance engine (`docs/compliance_rules.md`) on the raw tables only, never the ground truth,
@@ -50,7 +61,8 @@ decision in the title.
 - `config/`: pipeline configuration (`default.yaml`) and reference data (`reference/*.yaml`:
   threshold policies, products, packaging, locations)
 - `src/coldchain/`: the package (`schemas.py` holds the pandera schema of every table, `io.py`
-  reads/writes tables, `generate/` holds the data generators, `compliance/` the engine)
+  reads/writes tables, `generate/` holds the data generators, `inject/` the anomaly
+  injectors, `compliance/` the engine)
 - `tests/`: pytest suite
 - `docs/`: plan, decisions, brief, and the design documents:
   - [`data_dictionary.md`](docs/data_dictionary.md): every table and field

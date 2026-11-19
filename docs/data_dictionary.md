@@ -17,7 +17,7 @@ types or required flags.
 | Multi-valued cells | Items joined with `\|` (no spaces). Reason codes appear once each, in the canonical order of `ReasonCode` (most severe first). Empty list = null. |
 | Effective windows | Half-open `[from, to)`: `to` is exclusive; a null `to` is open-ended. Dates are UTC midnight. |
 | Nulls | Only fields marked *Required = no* may be null; the rule column says when. |
-| Layers | `raw` = generator/injector input (never contains labels) · `compliance` = engine output · `ground_truth` = answer key (never read by the engine). |
+| Layers | `raw` = generator/injector input (never contains labels) · `compliance` = engine output · `ground_truth` = answer key (never read by the engine). `baseline/{raw,ground_truth}` = byte-for-byte snapshot of the generator's clean `raw/` tables and `expected_outcomes`, taken before the first injection (not a table layer; never read by the engine). |
 | Ordering | Every table is sorted by its primary key before it is written. |
 
 **Where each rule is enforced** (tag at the start of each rule):
@@ -349,7 +349,11 @@ true bias, only its stated `uncertainty_c`.
 **Layer:** ground_truth · **Primary key:** (`anomaly_id`, `shipment_id`) · **Written by:** injector
 
 One row per (injected anomaly, affected shipment): an anomaly that touches two shipments
-(`excursion_across_unrelated_shipments`) has two rows sharing one `anomaly_id`.
+(`excursion_across_unrelated_shipments`) has two rows sharing one `anomaly_id`. Written as
+Parquet, CSV **and JSON** (an array of records). Anomaly IDs are numbered in issue-type order,
+then by the anomaly's first shipment. In `affected_record_ids` a logger ID stands for **all** of
+that logger's readings (used when every reading of a shipment was changed); otherwise the
+changed or neighbouring records are listed one by one (see `docs/anomaly_catalogue.md`).
 
 | Field | Type | Required | Allowed values / format | Unit | Unique | Validation rule |
 |---|---|---|---|---|---|---|
@@ -362,6 +366,7 @@ One row per (injected anomaly, affected shipment): an anomaly that touches two s
 | `expected_status` | string | yes | COMPLIANT, COMPLIANT_WITH_WARNINGS, INCONCLUSIVE, NON_COMPLIANT | — | no | S: = most severe status of `expected_reason_codes`. V: = `expected_outcomes.expected_status`. |
 | `expected_reason_codes` | string | no | `\|`-list of reason codes | — | no | S: known codes, distinct, canonical order. V: = `expected_outcomes.expected_reason_codes`. |
 | `expected_excursion_durations_min` | string | no | `\|`-list of integers | min | no | S: format. V: = `expected_outcomes.expected_excursion_durations_min`. |
+| `idle_min` | integer | no | ≥ 0; null except for `excursion_across_unrelated_shipments` | min | no | S: ≥ 0; non-null exactly on the pair rows. V: = B's `assigned_at` − A's `unassigned_at` (the device's idle time between the two assignments), the same on both rows of the pair. |
 
 ---
 

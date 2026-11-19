@@ -7,6 +7,11 @@ never assigned at random, and it is never obtained by scanning the generated rea
 stays independent from the Phase 4 engine. Natural readings are kept clear of every limit by
 construction (:mod:`coldchain.generate.readings`), so the designed segments are the only
 readings that can trigger a temperature rule. The tests re-scan the readings to prove it.
+
+The injector (:mod:`coldchain.inject`) reuses :func:`derive_expected_outcomes` for its target
+shipments, passing the *evidence* it built in (:data:`EVIDENCE_COLUMNS`): readings it removed or
+re-attributed, a foreign device, a broken custody chain and the carrier's claim. The same rules
+then also yield the coverage, gap, logger, custody and carrier codes (DECISIONS.md #70).
 """
 
 import numpy as np
@@ -18,6 +23,8 @@ from coldchain.enums import (
     STATUS_ACTION,
     STATUS_SEVERITY,
     BreachType,
+    CarrierReportedStatus,
+    DecidedAction,
     ExcursionDirection,
     ReasonCode,
 )
@@ -31,8 +38,25 @@ POLICY_LIMIT_COLUMNS = (
     "abs_max_c",
     "max_single_excursion_min",
     "max_cumulative_excursion_min",
+    "max_reading_gap_min",
+    "min_coverage_pct",
 )
 """Policy columns carried by :func:`applied_policies`."""
+
+EVIDENCE_COLUMNS = (
+    "untrusted_readings",
+    "foreign_device",
+    "custody_broken",
+    "carrier_reported_status",
+)
+"""Columns of the optional ``evidence`` frame of :func:`derive_expected_outcomes`.
+
+* ``untrusted_readings``: readings of the logger window that are missing or carry another device,
+  as **one contiguous block** (0 = complete stream);
+* ``foreign_device``: some in-window readings carry a device other than the assigned one;
+* ``custody_broken``: the custody chain was broken on purpose;
+* ``carrier_reported_status``: the carrier's claim (PASS/FAIL).
+"""
 
 
 def applied_policies(
@@ -136,6 +160,7 @@ def derive_expected_outcomes(
     devices: pd.DataFrame,
     route_stops: pd.DataFrame,
     segments: pd.DataFrame,
+    evidence: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Derive the expected engine result of every shipment from the documented rules.
 
@@ -149,8 +174,19 @@ def derive_expected_outcomes(
     * NEAR_LIMIT_UNCERTAIN from the designed at-limit readings (§1.6);
     * LONG_DWELL: any stop dwells longer than ``long_dwell_threshold_min`` (§1.9).
 
-    Natural data is complete, so no gap, coverage, logger or custody code is expected, and the
-    carrier's claim is set from the expected action, so no contradiction is expected either.
+    From the optional ``evidence`` (:data:`EVIDENCE_COLUMNS`, injected shipments only):
+
+    * LOW_COVERAGE: ``round(100 x (expected - untrusted) / expected, 2) < min_coverage_pct``
+      with ``expected = window / i + 1`` (§1.3);
+    * DATA_GAP: one block of ``m`` untrusted readings leaves a gap of ``(m + 1) x i`` (the
+      padded-gap rule of §1.4, which also covers ``m`` = every reading), breaching when it
+      exceeds ``max_reading_gap_min``;
+    * LOGGER_NOT_ASSIGNED: ``foreign_device`` (§1.2); CUSTODY_GAP: ``custody_broken`` (§1.8);
+    * CARRIER_STATUS_CONTRADICTED: the claim disagrees with the expected action (§1.10).
+
+    Natural data is complete, so without evidence no gap, coverage, logger or custody code is
+    expected, and the carrier's claim is set from the expected action, so no contradiction is
+    expected either.
 
     Args:
         config: Validated configuration.
@@ -160,6 +196,8 @@ def derive_expected_outcomes(
         devices: The ``devices`` table.
         route_stops: The ``route_stops`` table.
         segments: Designed segments (:func:`coldchain.generate.scenarios.design_segments`).
+        evidence: Optional facts built in by the injector, indexed by ``shipment_id`` with
+            :data:`EVIDENCE_COLUMNS`; shipments not listed have a complete, untouched record.
 
     Returns:
         The ``expected_outcomes`` table (schema columns, ``issue_type`` null).
@@ -188,11 +226,21 @@ def derive_expected_outcomes(
     breach = breach.reindex(ships, fill_value=False)
     total = by_ship["duration_min"].sum().reindex(ships, fill_value=0).astype("int64")
     max_dwell = route_stops.groupby("shipment_id")["dwell_min"].max().reindex(ships)
+    facts = _evidence(evidence, ships)
+    interval = config.reading_interval_min
+    window = (frame["unassigned_at"] - frame["assigned_at"]).dt.total_seconds() // 60
+    expected_count = window.astype("int64") // interval + 1
+    coverage = (100.0 * (expected_count - facts["untrusted_readings"]) / expected_count).round(2)
+    max_gap = (facts["untrusted_readings"] + 1) * interval
 
     flags = {
         ReasonCode.ABSOLUTE_LIMIT_BREACH: breach["absolute"],
         ReasonCode.SINGLE_DURATION_BREACH: breach["single"],
         ReasonCode.CUMULATIVE_DURATION_BREACH: total > frame["max_cumulative_excursion_min"],
+        ReasonCode.LOGGER_NOT_ASSIGNED: facts["foreign_device"],
+        ReasonCode.DATA_GAP: max_gap > frame["max_reading_gap_min"],
+        ReasonCode.LOW_COVERAGE: coverage < frame["min_coverage_pct"],
+        ReasonCode.CUSTODY_GAP: facts["custody_broken"],
         ReasonCode.CALIBRATION_EXPIRED: (
             (frame["calibration_due_on"] < frame["unassigned_at"].dt.date)
             | (frame["calibrated_on"] > frame["assigned_at"].dt.date)
@@ -208,7 +256,6 @@ def derive_expected_outcomes(
     matrix = pd.DataFrame(
         {code.value: flags.get(code, False) for code in ReasonCode}, index=ships
     ).astype(bool)
-    reasons = matrix.apply(lambda row: LIST_SEPARATOR.join(matrix.columns[row.to_numpy()]), axis=1)
     severity = pd.DataFrame(
         {
             code.value: np.where(matrix[code.value], STATUS_SEVERITY[status], 1)
@@ -220,6 +267,12 @@ def derive_expected_outcomes(
     by_severity = {level: status.value for status, level in STATUS_SEVERITY.items()}
     status = severity.map(by_severity)
     action = status.map({s.value: a.value for s, a in STATUS_ACTION.items()})
+    claim = facts["carrier_reported_status"]
+    release = action == DecidedAction.RELEASE.value
+    matrix[ReasonCode.CARRIER_STATUS_CONTRADICTED.value] = (
+        claim.notna() & ((claim == CarrierReportedStatus.PASS.value) != release)
+    ).to_numpy(dtype=bool)
+    reasons = matrix.apply(lambda row: LIST_SEPARATOR.join(matrix.columns[row.to_numpy()]), axis=1)
 
     windows = (
         excursions["started_at"].dt.strftime(ISO_TIMESTAMP_FORMAT)
@@ -245,3 +298,22 @@ def derive_expected_outcomes(
         }
     )
     return result
+
+
+def _evidence(evidence: pd.DataFrame | None, ships: pd.Index) -> pd.DataFrame:
+    """Align the injector's evidence with ``ships``; unlisted shipments are untouched."""
+    if evidence is None:
+        evidence = pd.DataFrame(columns=list(EVIDENCE_COLUMNS))
+    missing = set(EVIDENCE_COLUMNS) - set(evidence.columns)
+    if missing:
+        raise GenerationError(f"evidence lacks columns {sorted(missing)}")
+    aligned = evidence.reindex(ships)
+    return pd.DataFrame(
+        {
+            "untrusted_readings": aligned["untrusted_readings"].fillna(0).astype("int64"),
+            "foreign_device": aligned["foreign_device"].astype("boolean").fillna(False),
+            "custody_broken": aligned["custody_broken"].astype("boolean").fillna(False),
+            "carrier_reported_status": aligned["carrier_reported_status"].astype(object),
+        },
+        index=ships,
+    ).astype({"foreign_device": bool, "custody_broken": bool})

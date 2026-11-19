@@ -58,6 +58,9 @@ convention = "google"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --cov=coldchain --cov-report=term-missing"
+markers = [
+    "slow: large parametrised schema/io matrices and full CLI pipeline runs (deselect with -m 'not slow' for a fast dev run)",
+]
 
 [tool.coverage.run]
 source = ["coldchain"]

@@ -20,10 +20,21 @@ from coldchain.config import (
     load_config,
     load_reference,
 )
-from coldchain.enums import Layer, Scale
+from coldchain.enums import FileFormat, Layer, Scale, TableName
 from coldchain.errors import ColdchainError
 from coldchain.generate import generate_tables
-from coldchain.io import layer_dir, read_tables, write_layers
+from coldchain.inject import INJECT_INPUTS, inject_tables
+from coldchain.io import (
+    DEFAULT_FORMATS,
+    baseline_dir,
+    clear_injection,
+    ensure_baseline,
+    layer_dir,
+    read_table,
+    read_tables,
+    write_layers,
+    write_table,
+)
 from coldchain.schemas import TABLE_LAYERS
 
 app = typer.Typer(
@@ -87,7 +98,8 @@ def generate(
     """Generate master data, events and natural scenarios, plus the ground truth.
 
     Raw tables go to ``<output-dir>/<scale>/raw/``; the answer-key tables go to
-    ``<output-dir>/<scale>/ground_truth/``.
+    ``<output-dir>/<scale>/ground_truth/``. A previous injection's baseline snapshot and
+    anomaly list are removed, since they belong to the data being replaced.
     """
 
     def body() -> None:
@@ -98,12 +110,71 @@ def generate(
             "Generating scale=%s seed=%d (config %s)", scale.value, config.seed, config_path
         )
         tables = generate_tables(config, load_reference(), scale)
+        for path in clear_injection(output_dir, scale.value):
+            logger.info("Removed stale injection output %s", path)
         written = write_layers(tables, output_dir, scale.value)
         for name, frame in tables.items():
             logger.info("  %-13s %-24s %8d rows", TABLE_LAYERS[name].value, name.value, len(frame))
         for layer, target in written.items():
             count = sum(TABLE_LAYERS[name] is layer for name in tables)
             logger.info("Wrote %d %s tables (Parquet + CSV) to %s", count, layer.value, target)
+
+    _run(body)
+
+
+@app.command()
+def inject(
+    scale: Annotated[Scale, typer.Option("--scale", help="Scale preset to inject.")] = (
+        Scale.STARTER
+    ),
+    seed: Annotated[
+        int | None, typer.Option("--seed", min=0, help="Override the seed from the config file.")
+    ] = None,
+    config_path: Annotated[
+        Path, typer.Option("--config", help="Path to the pipeline config YAML.")
+    ] = DEFAULT_CONFIG_PATH,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Output root holding <root>/<scale>/ from `generate`."),
+    ] = DEFAULT_OUTPUT_DIR,
+) -> None:
+    """Inject the five labelled edge cases into the generated data.
+
+    The first run saves the clean generator output to ``<output-dir>/<scale>/baseline/``.
+    Every run starts from that snapshot, so re-running gives the same result. It rewrites
+    ``raw/`` (only the target shipments' records change), updates
+    ``ground_truth/expected_outcomes`` and writes ``ground_truth/anomalies`` (Parquet, CSV
+    and JSON).
+    """
+
+    def body() -> None:
+        config = load_config(config_path)
+        if seed is not None:
+            config = config.model_copy(update={"seed": seed})
+        if ensure_baseline(output_dir, scale.value):
+            logger.info("Snapshot of the clean data taken before the first injection")
+        logger.info("Injecting scale=%s seed=%d (config %s)", scale.value, config.seed, config_path)
+        baseline = {
+            name: read_table(name, baseline_dir(output_dir, scale.value, TABLE_LAYERS[name]))
+            for name in INJECT_INPUTS
+        }
+        tables = inject_tables(config, baseline)
+        anomalies = tables.pop(TableName.ANOMALIES)
+        written = write_layers(tables, output_dir, scale.value)
+        write_table(
+            TableName.ANOMALIES,
+            anomalies,
+            written[Layer.GROUND_TRUTH],
+            (*DEFAULT_FORMATS, FileFormat.JSON),
+        )
+        for name, frame in {**tables, TableName.ANOMALIES: anomalies}.items():
+            logger.info("  %-13s %-24s %8d rows", TABLE_LAYERS[name].value, name.value, len(frame))
+        logger.info(
+            "Wrote %d anomaly rows (%d anomalies) to %s",
+            len(anomalies),
+            anomalies["anomaly_id"].nunique(),
+            written[Layer.GROUND_TRUTH],
+        )
 
     _run(body)
 

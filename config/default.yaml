@@ -64,3 +64,9 @@ generation:
     max_dwell_warming_c: 2.0                      # cap on dwell warming
     dwell_recovery_min: 30                        # warming decays with this time constant after departure
     limit_margin_c: 0.05                          # natural readings stay > uncertainty + this from a limit
+
+# Anomaly injection (Phase 5, `coldchain inject`). Validated on load by coldchain.config.
+injection:
+  # missing_data_silently_passed deletes floor(max_reading_gap_min / interval) consecutive
+  # readings (the shortest block that breaches the gap limit) plus this many more.
+  missing_extra_readings: { min: 0, max: 6 }

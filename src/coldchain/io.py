@@ -4,15 +4,25 @@ Every table is validated against its schema, sorted by its primary key and writt
 text representation, so the same data always produces byte-identical files:
 
 * timestamps: ``YYYY-MM-DDTHH:MM:SSZ`` (UTC); dates: ``YYYY-MM-DD``;
-* nulls: an empty CSV field;
+* nulls: an empty CSV field, ``null`` in JSON;
 * floats: Python's shortest round-trip representation (values are already rounded).
+
+Parquet and CSV are written for every table; JSON (an array of records) only where a phase asks
+for it (``ground_truth/anomalies``).
+
+The module also keeps the **baseline snapshot** used by the injector: before the first
+``coldchain inject``, the generator's clean ``raw/`` tables and ``expected_outcomes`` are copied
+byte for byte to ``<scale>/baseline/{raw,ground_truth}/``, so injection always starts from the
+clean data and a diff against the baseline proves which records it changed (DECISIONS.md #67).
 
 Reading converts every column back to the exact physical dtype its schema declares
 (``datetime64[us, UTC]``, ``datetime.date``, ``Int64``, ``int64``, ``float64``, ``str``), so a
 written table read back passes its schema and equals the original frame.
 """
 
+import json
 import logging
+import shutil
 from collections.abc import Iterable, Mapping
 from datetime import date
 from enum import StrEnum
@@ -38,6 +48,15 @@ DATE_FORMAT = "%Y-%m-%d"
 
 DEFAULT_FORMATS: tuple[FileFormat, ...] = (FileFormat.PARQUET, FileFormat.CSV)
 """Formats written for every table unless the caller asks otherwise."""
+
+BASELINE_DIR = "baseline"
+"""Sub-folder of ``<root>/<scale>/`` holding the clean pre-injection snapshot."""
+
+BASELINE_TABLES: tuple[TableName, ...] = (
+    *(t for t, layer in TABLE_LAYERS.items() if layer is Layer.RAW),
+    TableName.EXPECTED_OUTCOMES,
+)
+"""Tables copied into the baseline snapshot: every raw table and the natural answer key."""
 
 
 class ColumnKind(StrEnum):
@@ -91,6 +110,11 @@ def table_path(directory: Path, table: TableName, fmt: FileFormat) -> Path:
 def layer_dir(output_root: Path, scale: str, layer: Layer) -> Path:
     """Return the directory of one output layer, e.g. ``output/starter/raw``."""
     return Path(output_root) / scale / layer.value
+
+
+def baseline_dir(output_root: Path, scale: str, layer: Layer) -> Path:
+    """Return a layer directory of the baseline snapshot, e.g. ``output/starter/baseline/raw``."""
+    return Path(output_root) / scale / BASELINE_DIR / layer.value
 
 
 def sort_by_primary_key(table: TableName, frame: pd.DataFrame) -> pd.DataFrame:
@@ -209,10 +233,13 @@ def write_table(
         path = table_path(directory, table, fmt)
         if fmt is FileFormat.PARQUET:
             ordered.to_parquet(path, index=False, engine="pyarrow")
-        else:
+        elif fmt is FileFormat.CSV:
             _to_text(table, ordered).to_csv(
                 path, index=False, na_rep="", lineterminator="\n", encoding="utf-8"
             )
+        else:
+            text = _to_text(table, ordered).to_json(orient="records", indent=2, force_ascii=False)
+            path.write_text(text + "\n", encoding="utf-8")
         paths[fmt] = path
     logger.debug("Wrote %s (%d rows) to %s", table.value, len(ordered), directory)
     return paths
@@ -292,10 +319,15 @@ def read_table(
     try:
         if fmt is FileFormat.PARQUET:
             raw = pd.read_parquet(path, engine="pyarrow")
-        else:
+        elif fmt is FileFormat.CSV:
             raw = pd.read_csv(
                 path, dtype=str, keep_default_na=False, na_values=[""], encoding="utf-8"
             )
+        else:
+            records = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                raise ValueError("expected a JSON array of records")
+            raw = pd.DataFrame.from_records(records, columns=list(SCHEMAS[table].columns))
     except (OSError, ValueError) as exc:
         raise TableIOError(f"Could not read {path}: {exc}") from exc
     frame = coerce_to_schema(table, raw)
@@ -314,3 +346,89 @@ def read_tables(
 def raw_tables() -> tuple[TableName, ...]:
     """Return every table of the ``raw`` layer, in declaration order."""
     return tuple(t for t, layer in TABLE_LAYERS.items() if layer is Layer.RAW)
+
+
+# --------------------------------------------------------------------------------------------
+# Baseline snapshot (injection)
+# --------------------------------------------------------------------------------------------
+
+
+def ensure_baseline(output_root: Path, scale: str) -> bool:
+    """Make sure the clean baseline snapshot exists, copying it from the generator output.
+
+    On the first call after ``coldchain generate``, every :data:`BASELINE_TABLES` file (all
+    formats present) is copied byte for byte from ``raw/`` and ``ground_truth/`` into
+    ``baseline/raw/`` and ``baseline/ground_truth/``. Later calls leave the snapshot untouched,
+    so a re-run of the injector starts again from the same clean data.
+
+    Args:
+        output_root: Output root.
+        scale: Scale name.
+
+    Returns:
+        ``True`` if the snapshot was created now, ``False`` if it already existed.
+
+    Raises:
+        TableIOError: If the generator output (or an existing snapshot) is incomplete.
+    """
+    targets = {layer: baseline_dir(output_root, scale, layer) for layer in _snapshot_layers()}
+    if baseline_root(output_root, scale).exists():
+        for name in BASELINE_TABLES:
+            _require_parquet(baseline_dir(output_root, scale, TABLE_LAYERS[name]), name)
+        return False
+    sources = {layer: layer_dir(output_root, scale, layer) for layer in targets}
+    for name in BASELINE_TABLES:
+        _require_parquet(sources[TABLE_LAYERS[name]], name)
+    for name in BASELINE_TABLES:
+        layer = TABLE_LAYERS[name]
+        targets[layer].mkdir(parents=True, exist_ok=True)
+        for fmt in FileFormat:
+            source = table_path(sources[layer], name, fmt)
+            if source.is_file():
+                shutil.copyfile(source, table_path(targets[layer], name, fmt))
+    logger.info("Saved the clean baseline snapshot to %s", baseline_root(output_root, scale))
+    return True
+
+
+def baseline_root(output_root: Path, scale: str) -> Path:
+    """Return the baseline snapshot folder, e.g. ``output/starter/baseline``."""
+    return Path(output_root) / scale / BASELINE_DIR
+
+
+def clear_injection(output_root: Path, scale: str) -> list[Path]:
+    """Remove the outputs of a previous injection (baseline snapshot and anomalies).
+
+    Called by ``coldchain generate``: freshly generated data makes an older snapshot and answer
+    key stale.
+
+    Args:
+        output_root: Output root.
+        scale: Scale name.
+
+    Returns:
+        The paths that were removed.
+    """
+    removed: list[Path] = []
+    root = baseline_root(output_root, scale)
+    if root.exists():
+        shutil.rmtree(root)
+        removed.append(root)
+    truth = layer_dir(output_root, scale, Layer.GROUND_TRUTH)
+    for fmt in FileFormat:
+        path = table_path(truth, TableName.ANOMALIES, fmt)
+        if path.is_file():
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
+def _snapshot_layers() -> tuple[Layer, ...]:
+    """Layers that hold at least one :data:`BASELINE_TABLES` table."""
+    return tuple(dict.fromkeys(TABLE_LAYERS[name] for name in BASELINE_TABLES))
+
+
+def _require_parquet(directory: Path, table: TableName) -> None:
+    """Fail with a clear message if a table's Parquet file is missing."""
+    path = table_path(directory, table, FileFormat.PARQUET)
+    if not path.is_file():
+        raise TableIOError(f"Table file not found: {path} (run `coldchain generate` first)")

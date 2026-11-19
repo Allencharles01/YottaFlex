@@ -300,6 +300,7 @@ def build_valid_tables() -> dict[TableName, pd.DataFrame]:
                 "expected_status": ["INCONCLUSIVE"],
                 "expected_reason_codes": _str("CUSTODY_GAP"),
                 "expected_excursion_durations_min": _str(None),
+                "idle_min": pd.array([None], dtype="Int64"),
             }
         ),
     }

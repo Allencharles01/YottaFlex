@@ -206,6 +206,7 @@ class FileFormat(StrEnum):
 
     PARQUET = "parquet"
     CSV = "csv"
+    JSON = "json"
 
 
 class TableName(StrEnum):

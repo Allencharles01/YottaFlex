@@ -32,6 +32,8 @@ class Case:
     calibrated: date = date(2026, 1, 1)
     dwell: int | None = 60
     uncertainty: float = 0.3
+    evidence: dict | None = None
+    """Injector evidence (``expected.EVIDENCE_COLUMNS``); ``None`` = untouched shipment."""
 
 
 def _derive(app_config, cases: list[Case]) -> pd.DataFrame:
@@ -49,6 +51,8 @@ def _derive(app_config, cases: list[Case]) -> pd.DataFrame:
             "abs_max_c": 12.0,
             "max_single_excursion_min": [c.policy["max_single_excursion_min"] for c in cases],
             "max_cumulative_excursion_min": 60,
+            "max_reading_gap_min": 30,
+            "min_coverage_pct": 95.0,
         }
     )
     loggers = pd.DataFrame(
@@ -93,8 +97,14 @@ def _derive(app_config, cases: list[Case]) -> pd.DataFrame:
     segments = pd.DataFrame(rows, columns=list(expected_columns()))
     segments["started_at"] = pd.to_datetime(segments["started_at"], utc=True)
     segments["ended_at"] = pd.to_datetime(segments["ended_at"], utc=True)
+    facts = [
+        {"shipment_id": ship, **EVIDENCE_DEFAULTS, **case.evidence}
+        for ship, case in zip(sid, cases, strict=True)
+        if case.evidence is not None
+    ]
+    evidence = pd.DataFrame(facts).set_index("shipment_id") if facts else None
     outcomes = expected.derive_expected_outcomes(
-        app_config, assignment, applied, loggers, devices, stops, segments
+        app_config, assignment, applied, loggers, devices, stops, segments, evidence
     )
     validate(TableName.EXPECTED_OUTCOMES, coerce_to_schema(TableName.EXPECTED_OUTCOMES, outcomes))
     return outcomes.set_index("shipment_id")
@@ -107,6 +117,14 @@ def expected_columns() -> tuple[str, ...]:
 
 
 EXC = (True, "HIGH")
+EVIDENCE_DEFAULTS = {
+    "untrusted_readings": 0,
+    "foreign_device": False,
+    "custody_broken": False,
+    "carrier_reported_status": "PASS",
+}
+WINDOW_READINGS = 24 * 6 + 1
+"""Readings in the 24-hour test window (``window / i + 1``)."""
 
 
 @pytest.mark.parametrize(
@@ -381,3 +399,64 @@ def test_normal_shipments_are_compliant_unless_the_policy_version_changed(starte
     normal = outcomes[outcomes["scenario"] == Scenario.NORMAL]
     warned = normal[normal["expected_status"] != ComplianceStatus.COMPLIANT]
     assert (warned["expected_reason_codes"] == "POLICY_MISMATCH_DECLARED").all()
+
+
+# --------------------------------------------------------------------------------------------
+# Injector evidence (Phase 5): coverage, gaps, logger, custody and carrier claim
+# --------------------------------------------------------------------------------------------
+
+
+# 95 % of 145 readings = 137.75, so 7 untrusted readings (95.17 %) pass and 8 (94.48 %) fail.
+@pytest.mark.parametrize(
+    ("evidence", "reasons"),
+    [
+        ({}, None),
+        ({"untrusted_readings": 2}, None),  # gap of 30 min = the limit: passes
+        (
+            {"untrusted_readings": 2, "carrier_reported_status": "FAIL"},
+            "CARRIER_STATUS_CONTRADICTED",
+        ),
+        ({"untrusted_readings": 3}, "DATA_GAP|CARRIER_STATUS_CONTRADICTED"),
+        ({"untrusted_readings": 3, "carrier_reported_status": "FAIL"}, "DATA_GAP"),
+        ({"untrusted_readings": 7}, "DATA_GAP|CARRIER_STATUS_CONTRADICTED"),
+        ({"untrusted_readings": 8}, "DATA_GAP|LOW_COVERAGE|CARRIER_STATUS_CONTRADICTED"),
+        (
+            {"untrusted_readings": WINDOW_READINGS, "foreign_device": True},
+            "LOGGER_NOT_ASSIGNED|DATA_GAP|LOW_COVERAGE|CARRIER_STATUS_CONTRADICTED",
+        ),
+        ({"custody_broken": True}, "CUSTODY_GAP|CARRIER_STATUS_CONTRADICTED"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_evidence_rules(app_config, evidence: dict, reasons) -> None:
+    row = _derive(app_config, [Case(evidence=evidence)]).iloc[0]
+    assert (pd.isna(row["expected_reason_codes"]) and reasons is None) or row[
+        "expected_reason_codes"
+    ] == reasons
+
+
+def test_evidence_is_combined_with_designed_facts(app_config) -> None:
+    rows = _derive(
+        app_config,
+        [
+            Case(segments=[(4, -1, *EXC)], evidence={}),
+            Case(segments=[(3, -1, *EXC)], evidence={}),
+            Case(segments=[(4, -1, *EXC)], evidence={"carrier_reported_status": "FAIL"}),
+            Case(segments=[(4, -1, *EXC)]),
+        ],
+    )
+    assert rows["expected_reason_codes"].tolist() == [
+        "SINGLE_DURATION_BREACH|CARRIER_STATUS_CONTRADICTED",
+        "EXCURSION_WITHIN_ALLOWANCE",
+        "SINGLE_DURATION_BREACH",
+        "SINGLE_DURATION_BREACH",  # no evidence: the claim is not judged
+    ]
+    assert (
+        rows["expected_status"].tolist()
+        == ["NON_COMPLIANT", "COMPLIANT_WITH_WARNINGS"] + ["NON_COMPLIANT"] * 2
+    )
+
+
+def test_evidence_must_have_every_column(app_config) -> None:
+    with pytest.raises(GenerationError, match="evidence lacks columns"):
+        expected._evidence(pd.DataFrame({"untrusted_readings": [1]}), pd.Index(["SHP-2026-000001"]))

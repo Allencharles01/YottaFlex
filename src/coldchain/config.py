@@ -277,6 +277,17 @@ class GenerationConfig(_StrictModel):
         return self
 
 
+class InjectionConfig(_StrictModel):
+    """How the Phase 5 injectors shape an anomaly (``coldchain inject``)."""
+
+    missing_extra_readings: IntRange
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> "InjectionConfig":
+        _require_non_negative("missing_extra_readings", self.missing_extra_readings)
+        return self
+
+
 class AppConfig(_StrictModel):
     """Validated top-level configuration."""
 
@@ -289,6 +300,7 @@ class AppConfig(_StrictModel):
     injection_rates: dict[IssueType, float]
     long_dwell_threshold_min: int = Field(gt=0)
     generation: GenerationConfig
+    injection: InjectionConfig
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "AppConfig":

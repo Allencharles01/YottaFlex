@@ -257,7 +257,7 @@ def generate_readings(
     temperature = np.clip(natural, bands["safe_low"], bands["safe_high"])
 
     rows, values = _designed_values(
-        config, loggers, context, segments, bands, temperature, noise, rngs
+        config, loggers, context, segments, bands, temperature, noise, rngs["excursions"]
     )
     clipped, natural_count = clipping_counts(natural, bands["safe_low"], bands["safe_high"], rows)
     logger.info(
@@ -288,7 +288,7 @@ def _designed_values(
     bands: dict[str, np.ndarray],
     natural: np.ndarray,
     noise: np.ndarray,
-    rngs: dict[str, np.random.Generator],
+    rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Grid positions and temperatures of every designed reading and of its ramps.
 
@@ -300,7 +300,7 @@ def _designed_values(
         bands: Output of :func:`_bands`, aligned with ``context``.
         natural: Natural temperature per grid row, already clipped to the safe band.
         noise: Per-reading noise, aligned with ``context``.
-        rngs: One generator per key of :data:`STAGES`.
+        rng: The stream that draws each segment's peak level and absolute excess.
 
     Returns:
         ``(rows, values)``: positions in ``context`` and their temperatures.
@@ -308,7 +308,6 @@ def _designed_values(
     Raises:
         GenerationError: If two designed readings or ramps fall on the same grid row.
     """
-    rng = rngs["excursions"]
     excess = config.generation.scenarios.abs_breach_excess_c
     level_u = rng.uniform(0.0, 1.0, size=len(segments))
     excess_c = rng.uniform(excess.min, excess.max, size=len(segments))
@@ -376,3 +375,63 @@ def _designed_values(
     if len(np.unique(all_rows)) != len(all_rows):
         raise GenerationError("Designed segments or their ramps overlap on the reading grid")
     return all_rows, _rounded(np.concatenate([values, ramp_values]))
+
+
+def reshape_segments(
+    config: AppConfig,
+    loggers: pd.DataFrame,
+    readings: pd.DataFrame,
+    limits: pd.DataFrame,
+    devices: pd.DataFrame,
+    segments: pd.DataFrame,
+    rng: np.random.Generator,
+) -> pd.Series:
+    """Shape designed segments into existing, complete reading streams (used by the injector).
+
+    The segments' readings and ramps are computed exactly as in :func:`generate_readings`
+    (parabolic hump in the excursion band, linear ramps inside the safe band), starting from
+    the stream's current temperatures instead of a freshly drawn natural value. Fresh noise for
+    the hump is drawn from ``rng``.
+
+    Args:
+        config: Validated configuration.
+        loggers: The logger assignments whose streams are reshaped (``logger_id``,
+            ``shipment_id``, ``device_id``, ``assigned_at``, ``unassigned_at``).
+        readings: The ``temperature_readings`` table (other loggers are ignored).
+        limits: Per ``shipment_id``: ``min_c``, ``max_c``, ``abs_min_c``, ``abs_max_c``.
+        devices: The ``devices`` table (``uncertainty_c``).
+        segments: Designed segments of those loggers
+            (:data:`coldchain.generate.scenarios.SEGMENT_COLUMNS`).
+        rng: The caller's stream.
+
+    Returns:
+        New temperatures (rounded to 2 decimals) indexed by ``reading_id``, for the segment and
+        ramp readings only.
+
+    Raises:
+        GenerationError: If a stream is not complete on the reading grid, a band is empty, or
+            designed readings and ramps overlap.
+    """
+    ordered = loggers.sort_values("logger_id", kind="stable").reset_index(drop=True)
+    stream = readings[readings["logger_id"].isin(ordered["logger_id"])]
+    stream = stream.sort_values(["logger_id", "recorded_at"], kind="stable").reset_index(drop=True)
+    grid = reading_grid(ordered, config.reading_interval_min)
+    if len(stream) != len(grid) or not (
+        (stream["logger_id"].to_numpy() == grid["logger_id"].to_numpy()).all()
+        and (stream["recorded_at"].to_numpy() == grid["recorded_at"].to_numpy()).all()
+    ):
+        raise GenerationError("Only complete reading streams on the grid can be reshaped")
+    context = (
+        grid.merge(
+            limits[["shipment_id", "min_c", "max_c", "abs_min_c", "abs_max_c"]],
+            on="shipment_id",
+            how="left",
+        )
+        .merge(devices[["device_id", "uncertainty_c"]], on="device_id", how="left")
+        .reset_index(drop=True)
+    )
+    bands = _bands(context, config.generation.readings.limit_margin_c)
+    noise = rng.normal(0.0, config.generation.readings.noise_sd_c, size=len(context))
+    natural = stream["temperature_c"].to_numpy(dtype="float64")
+    rows, values = _designed_values(config, ordered, context, segments, bands, natural, noise, rng)
+    return pd.Series(values, index=stream["reading_id"].to_numpy()[rows], name="temperature_c")

@@ -35,3 +35,7 @@ class ComplianceError(ColdchainError):
     Examples: a shipment that mixes policy codes, has no lots, has no policy version effective
     at departure, or whose logger references an unknown device.
     """
+
+
+class InjectionError(ColdchainError):
+    """Raised when the anomaly injector cannot place an anomaly (e.g. too few eligible targets)."""

@@ -235,6 +235,18 @@ def _mutations() -> list[tuple[str, Any, str]]:
             setv(["generation", "planning_lead_hours"], {"min": 24, "max": 100000}),
             "planning_lead_hours.max",
         ),
+        ("missing injection", drop("injection"), "injection"),
+        (
+            "negative extra missing readings",
+            setv(["injection", "missing_extra_readings"], {"min": -1, "max": 2}),
+            "missing_extra_readings.min must be >= 0",
+        ),
+        (
+            "extra missing readings max < min",
+            setv(["injection", "missing_extra_readings"], {"min": 3, "max": 2}),
+            "must be >= min",
+        ),
+        ("unknown injection key", setv(["injection", "typo"], 1), "typo"),
     ]
 
 

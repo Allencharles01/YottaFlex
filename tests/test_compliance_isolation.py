@@ -5,8 +5,9 @@ Three independent proofs:
 1. *static*: no engine module (nor the ``check`` command) names a ground-truth table or layer,
    or imports the generator (which knows every shipment's scenario);
 2. *declared inputs*: every table in ``ENGINE_INPUTS`` belongs to the ``raw`` layer;
-3. *dynamic*: ``coldchain check`` runs with ``ground_truth/`` deleted, while every file open,
-   directory listing and table read is recorded; none touches ``ground_truth``.
+3. *dynamic*: on injected data, ``coldchain check`` runs with ``ground_truth/`` deleted, while
+   every file open, directory listing and table read is recorded; none touches
+   ``ground_truth`` or the ``baseline`` snapshot (which holds a copy of the natural answer key).
 """
 
 import ast
@@ -23,6 +24,7 @@ from coldchain import cli
 from coldchain.compliance import ENGINE_INPUTS
 from coldchain.config import PROJECT_ROOT
 from coldchain.enums import Layer, TableName
+from coldchain.io import BASELINE_DIR
 from coldchain.schemas import TABLE_LAYERS
 
 ENGINE_DIR = PROJECT_ROOT / "src" / "coldchain" / "compliance"
@@ -42,6 +44,11 @@ def _engine_sources() -> list[Path]:
     sources = sorted(ENGINE_DIR.glob("*.py"))
     assert sources, ENGINE_DIR
     return sources
+
+
+@pytest.mark.parametrize("path", _engine_sources(), ids=lambda p: p.name)
+def test_engine_modules_never_name_the_baseline_snapshot(path: Path) -> None:
+    assert BASELINE_DIR not in path.read_text(encoding="utf-8"), path.name
 
 
 @pytest.mark.parametrize("path", _engine_sources(), ids=lambda p: p.name)
@@ -93,13 +100,15 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)  # audit hooks cannot be removed; it records only while _RECORDED is set
 
 
+@pytest.mark.slow
 def test_check_runs_without_ground_truth_and_never_touches_it(tmp_path, monkeypatch) -> None:
     global _RECORDED
     runner = CliRunner()
-    generated = runner.invoke(
-        cli.app, ["generate", "--scale", "starter", "--output-dir", str(tmp_path)]
-    )
-    assert generated.exit_code == 0, generated.output
+    for command in ("generate", "inject"):  # injected data, with a baseline snapshot on disk
+        done = runner.invoke(
+            cli.app, [command, "--scale", "starter", "--output-dir", str(tmp_path)]
+        )
+        assert done.exit_code == 0, done.output
     ground_truth = tmp_path / "starter" / Layer.GROUND_TRUTH.value
     assert ground_truth.is_dir()
     shutil.rmtree(ground_truth)
@@ -131,6 +140,7 @@ def test_check_runs_without_ground_truth_and_never_touches_it(tmp_path, monkeypa
     assert touched, "the audit hook recorded nothing"
     for path in touched + tables_read:
         assert Layer.GROUND_TRUTH.value not in path, path
+        assert BASELINE_DIR not in Path(path).parts, path  # nor the pre-injection snapshot
     raw_dir = tmp_path / "starter" / Layer.RAW.value
     assert sorted(tables_read) == sorted(str(raw_dir / f"{t.value}.parquet") for t in ENGINE_INPUTS)
     assert (tmp_path / "starter" / Layer.COMPLIANCE.value / "compliance_decisions.csv").is_file()

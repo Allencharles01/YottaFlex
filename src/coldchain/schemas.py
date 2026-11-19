@@ -974,8 +974,18 @@ SCHEMAS: dict[TableName, pa.DataFrameSchema] = {
             "expected_status": _enum(ComplianceStatus),
             "expected_reason_codes": _reason_list(),
             "expected_excursion_durations_min": _pattern_cell(_INT_LIST),
+            "idle_min": _int(0, nullable=True),
         },
-        [_status_matches_reasons("expected_status", "expected_reason_codes")],
+        [
+            _status_matches_reasons("expected_status", "expected_reason_codes"),
+            _rule(
+                "idle_min_iff_back_to_back_pair",
+                lambda df: (
+                    df["idle_min"].notna()
+                    == (df["issue_type"] == IssueType.EXCURSION_ACROSS_UNRELATED_SHIPMENTS.value)
+                ),
+            ),
+        ],
     ),
 }
 """The pandera schema of every table, keyed by :class:`TableName`."""
