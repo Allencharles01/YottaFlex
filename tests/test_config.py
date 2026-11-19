@@ -171,6 +171,70 @@ def _mutations() -> list[tuple[str, Any, str]]:
             setv(["generation", "lots", "colour"], "blue"),
             "colour",
         ),
+        # Phase 3: scenarios, readings and events
+        (
+            "zero baseline dwell",
+            setv(["generation", "routes", "dwell_min"], {"min": 0, "max": 120}),
+            "dwell_min.min must be >= 1",
+        ),
+        (
+            "long dwell not above threshold",
+            setv(["generation", "scenarios", "long_dwell_min"], {"min": 120, "max": 300}),
+            "long_dwell_min.min must be > long_dwell_threshold_min",
+        ),
+        (
+            "long dwell without intermediate stops",
+            setv(["generation", "routes", "intermediate_stops"], {"min": 0, "max": 0}),
+            "LONG_DWELL needs an intermediate stop",
+        ),
+        (
+            "breach without extra readings",
+            setv(["generation", "scenarios", "breach_extra_readings"], {"min": 0, "max": 2}),
+            "breach_extra_readings.min",
+        ),
+        (
+            "no at-limit readings",
+            setv(["generation", "scenarios", "at_limit_readings"], {"min": 0, "max": 2}),
+            "at_limit_readings.min",
+        ),
+        (
+            "absolute excess below 2 dp",
+            setv(["generation", "scenarios", "abs_breach_excess_c"], {"min": 0.0, "max": 1.0}),
+            "abs_breach_excess_c.min",
+        ),
+        ("zero separation", setv(["generation", "scenarios", "separation_readings"], 0), "separ"),
+        (
+            "no ramp readings",
+            setv(["generation", "scenarios", "ramp_readings"], {"min": 0, "max": 2}),
+            "ramp_readings.min",
+        ),
+        (
+            "separation shorter than two ramps",
+            setv(["generation", "scenarios", "separation_readings"], 7),
+            "ramps never overlap",
+        ),
+        ("negative noise", setv(["generation", "readings", "noise_sd_c"], -0.1), "noise_sd_c"),
+        (
+            "negative drift amplitude",
+            setv(["generation", "readings", "drift_amplitude_c"], {"min": -1.0, "max": 0.5}),
+            "drift_amplitude_c.min",
+        ),
+        (
+            "zero drift period",
+            setv(["generation", "readings", "drift_period_hours"], {"min": 0, "max": 5}),
+            "drift_period_hours.min",
+        ),
+        ("margin below 2 dp", setv(["generation", "readings", "limit_margin_c"], 0.0), "margin"),
+        (
+            "planning lead shorter than earliest departure",
+            setv(["generation", "planning_lead_hours"], {"min": 0, "max": 10}),
+            "planning_lead_hours.min",
+        ),
+        (
+            "planning lead longer than party activity",
+            setv(["generation", "planning_lead_hours"], {"min": 24, "max": 100000}),
+            "planning_lead_hours.max",
+        ),
     ]
 
 

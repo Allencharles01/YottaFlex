@@ -14,19 +14,24 @@ The stage works in dependency order:
 7. **loggers**: one device per shipment, scheduled so no device has overlapping windows and
    every assignment lies inside the device's calibration validity.
 
-This is a valid *baseline*: dwell never exceeds ``long_dwell_threshold_min`` and the carrier
-reports PASS for every shipment. Natural scenarios (Phase 3) and injected anomalies (Phase 5)
-build on top of it.
+Natural scenarios (Phase 3) are assigned *before* this stage and reach it as per-shipment
+:class:`ShipmentFlags` (DECISIONS.md #38): a LONG_DWELL shipment gets at least one intermediate
+stop and one dwell above ``long_dwell_threshold_min``; a CALIBRATION_EXPIRED shipment gets a
+device already past its calibration due date; a policy-transition shipment gets a minimum
+departure delay. Without flags, the output is the valid all-NORMAL baseline: dwell never exceeds
+``long_dwell_threshold_min`` and every device's calibration covers its assignment. The carrier's
+claim is set by the caller from the expected outcome (:mod:`coldchain.generate`).
 """
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from coldchain import ids
 from coldchain.config import AppConfig, ReferenceData
-from coldchain.enums import CarrierReportedStatus, LotStatus, PartyType, StopType, TableName
+from coldchain.enums import LotStatus, PartyType, StopType, TableName
 from coldchain.errors import GenerationError
 from coldchain.schemas import SCHEMAS, TIMESTAMP_DTYPE, effective_policy_ids
 
@@ -46,6 +51,43 @@ PAIR_WEIGHT_RANGE = (0.5, 1.5)
 """Relative weight range of one shipment's share of a lot it draws from."""
 
 MINUTES_PER_DAY = 24 * 60
+
+
+@dataclass(frozen=True)
+class ShipmentFlags:
+    """Per-shipment scenario flags for the shipment generators, aligned with the plan rows.
+
+    Attributes:
+        long_dwell: Force one intermediate stop with a dwell in ``scenarios.long_dwell_min``.
+        expired_device: Assign a device whose calibration was already due before the window.
+        min_departure_delay_min: Lower bound of the actual departure delay, in minutes.
+        min_trip_min: Lower bound of the planned trip, in minutes (``None``: the configured
+            ``trip_duration_hours.min`` for every shipment).
+    """
+
+    long_dwell: np.ndarray
+    expired_device: np.ndarray
+    min_departure_delay_min: np.ndarray
+    min_trip_min: np.ndarray | None = None
+
+    @classmethod
+    def baseline(cls, config: AppConfig, count: int) -> "ShipmentFlags":
+        """Flags that change nothing: the all-NORMAL baseline.
+
+        Args:
+            config: Validated configuration.
+            count: Number of shipments.
+
+        Returns:
+            Flags with every switch off and the configured minimum delay.
+        """
+        return cls(
+            long_dwell=np.zeros(count, dtype=bool),
+            expired_device=np.zeros(count, dtype=bool),
+            min_departure_delay_min=np.full(
+                count, config.generation.departure_delay_min.min, dtype="int64"
+            ),
+        )
 
 
 def great_circle_km(
@@ -158,6 +200,7 @@ def plan_routes(
     parties: pd.DataFrame,
     reference: ReferenceData,
     rng: np.random.Generator,
+    force_stop: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Build every shipment's ordered stops and the road distance of each leg.
 
@@ -173,6 +216,8 @@ def plan_routes(
         parties: The ``parties`` table.
         reference: Reference data (city coordinates).
         rng: The ``shipments.routes`` stream.
+        force_stop: Optional boolean per shipment: give it at least one intermediate stop
+            (LONG_DWELL needs a stop to dwell at).
 
     Returns:
         One row per stop: ``shipment_id``, ``sequence``, ``stop_type``, ``party_id`` and
@@ -187,6 +232,8 @@ def plan_routes(
         ),
         len(warehouses),
     )
+    if force_stop is not None:
+        n_stops = np.where(force_stop, np.maximum(n_stops, 1), n_stops)
 
     coords = pd.DataFrame(
         [(loc.city, loc.latitude, loc.longitude) for loc in reference.locations],
@@ -266,8 +313,47 @@ def plan_routes(
 # --------------------------------------------------------------------------------------------
 
 
+def _pick_long_dwell_stops(
+    plan: pd.DataFrame,
+    stops: pd.DataFrame,
+    is_hub: np.ndarray,
+    long_dwell: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Choose one random intermediate stop per ``long_dwell`` shipment.
+
+    Args:
+        plan: The shipment plan.
+        stops: The route stops.
+        is_hub: Boolean per stop: an intermediate (WAREHOUSE/CROSS_DOCK) stop.
+        long_dwell: Boolean per plan row.
+        rng: The ``shipments.routes`` stream.
+
+    Returns:
+        Boolean per stop: the stop that dwells long.
+
+    Raises:
+        GenerationError: If a flagged shipment has no intermediate stop.
+    """
+    flagged = pd.Series(long_dwell, index=plan["shipment_id"].to_numpy())
+    candidate = is_hub & flagged.loc[stops["shipment_id"].to_numpy()].to_numpy()
+    key = np.where(candidate, rng.random(len(stops)), -1.0)
+    best = pd.Series(key).groupby(stops["shipment_id"].to_numpy()).transform("max").to_numpy()
+    chosen = candidate & (key == best)
+    missing = sorted(
+        set(plan.loc[long_dwell, "shipment_id"]) - set(stops.loc[chosen, "shipment_id"])
+    )
+    if missing:
+        raise GenerationError(f"LONG_DWELL shipments without an intermediate stop: {missing}")
+    return chosen
+
+
 def schedule_trips(
-    config: AppConfig, plan: pd.DataFrame, stops: pd.DataFrame, rng: np.random.Generator
+    config: AppConfig,
+    plan: pd.DataFrame,
+    stops: pd.DataFrame,
+    rng: np.random.Generator,
+    flags: ShipmentFlags | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compute planned and actual trip times and every stop's arrival/departure.
 
@@ -275,12 +361,16 @@ def schedule_trips(
     intermediate stop, rounded to whole minutes and clipped to ``trip_duration_hours``. The
     *actual* trip departs ``departure_delay_min`` after the plan; each leg's drive time is the
     planned leg time x ``drive_time_factor``, and each intermediate stop dwells ``dwell_min``.
+    With ``flags``, one random intermediate stop of every ``long_dwell`` shipment dwells
+    ``scenarios.long_dwell_min`` instead, the departure delay is at least
+    ``min_departure_delay_min`` and the planned trip at least ``min_trip_min``.
 
     Args:
         config: Validated configuration.
         plan: Output of :func:`plan_shipments`.
         stops: Output of :func:`plan_routes`.
         rng: The ``shipments.routes`` stream (continues after :func:`plan_routes`).
+        flags: Optional scenario flags (default: the baseline).
 
     Returns:
         ``(plan, stops)``: the plan with ``planned_arrival_at``, ``actual_departure_at`` and
@@ -288,8 +378,11 @@ def schedule_trips(
         ``dwell_min``.
 
     Raises:
-        GenerationError: If the planned dwell leaves no time to drive within the maximum trip.
+        GenerationError: If the planned dwell leaves no time to drive within the maximum trip,
+            a ``min_trip_min`` exceeds the maximum trip, or a ``long_dwell`` shipment has no
+            intermediate stop.
     """
+    flags = flags if flags is not None else ShipmentFlags.baseline(config, len(plan))
     settings = config.generation.routes
     is_origin = (stops["stop_type"] == StopType.ORIGIN).to_numpy()
     is_hub = stops["stop_type"].isin([StopType.WAREHOUSE, StopType.CROSS_DOCK]).to_numpy()
@@ -306,12 +399,16 @@ def schedule_trips(
     planned_total = np.clip(
         np.round(drive_per_ship.loc[ship_ids].to_numpy() + planned_dwell), lowest, highest
     ).astype("int64")
-    planned_drive = planned_total - planned_dwell
-    if (planned_drive <= 0).any():
+    if (planned_total - planned_dwell <= 0).any():
         raise GenerationError(
             "Planned dwell leaves no drive time within trip_duration_hours.max; "
             "lower generation.routes.planned_dwell_min or intermediate_stops.max"
         )
+    if flags.min_trip_min is not None:
+        if (flags.min_trip_min > highest).any():
+            raise GenerationError("A scenario needs a trip longer than trip_duration_hours.max")
+        planned_total = np.maximum(planned_total, flags.min_trip_min).astype("int64")
+    planned_drive = planned_total - planned_dwell
 
     # Distribute each shipment's planned drive time over its legs, pro rata to distance.
     per_stop = pd.DataFrame({"shipment_id": shipment.to_numpy(), "raw": raw_drive})
@@ -331,8 +428,13 @@ def schedule_trips(
         rng.integers(settings.dwell_min.min, settings.dwell_min.max + 1, size=len(stops)),
         0,
     ).astype("int64")
+    long_stop = _pick_long_dwell_stops(plan, stops, is_hub, flags.long_dwell, rng)
+    long_range = config.generation.scenarios.long_dwell_min
+    long_dwell = rng.integers(long_range.min, long_range.max + 1, size=len(stops))
+    dwell = np.where(long_stop, long_dwell, dwell).astype("int64")
     delay_range = config.generation.departure_delay_min
     delay = rng.integers(delay_range.min, delay_range.max + 1, size=len(plan))
+    delay = np.maximum(delay, flags.min_departure_delay_min)
 
     plan = plan.copy()
     plan["planned_arrival_at"] = plan["planned_departure_at"] + _minutes(planned_total)
@@ -538,7 +640,11 @@ def allocate_lots(
 
 
 def assign_loggers(
-    config: AppConfig, plan: pd.DataFrame, devices: pd.DataFrame, rng: np.random.Generator
+    config: AppConfig,
+    plan: pd.DataFrame,
+    devices: pd.DataFrame,
+    rng: np.random.Generator,
+    expired_device: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Assign one device to every shipment without overlapping any device's windows.
 
@@ -546,20 +652,27 @@ def assign_loggers(
     grid) and ends ``logger_tail_min`` after the actual arrival (ceiled to the grid). Shipments
     are scheduled in window order; each takes a random device that is free (its previous
     window ended at least ``turnaround_min`` earlier) and whose calibration is valid on every
-    day of the window. The loop runs over shipments, never over readings.
+    day of the window. A shipment flagged ``expired_device`` (CALIBRATION_EXPIRED) instead takes
+    a free device whose ``calibration_due_on`` is before the window's first day, i.e. a device
+    already past its due date. Baseline shipments never use such a device, so expired devices
+    are idle. The loop runs over shipments, never over readings.
 
     Args:
         config: Validated configuration.
         plan: Scheduled plan (:func:`schedule_trips`).
         devices: The ``devices`` table.
         rng: The ``shipments.loggers`` stream.
+        expired_device: Optional boolean per plan row (default: none flagged).
 
     Returns:
         The ``loggers`` table.
 
     Raises:
-        GenerationError: If no device is free and calibrated for some shipment.
+        GenerationError: If no suitable free device exists for some shipment.
     """
+    expired = (
+        np.zeros(len(plan), dtype=bool) if expired_device is None else np.asarray(expired_device)
+    )
     settings = config.generation
     grid = f"{config.reading_interval_min}min"
     lead = rng.integers(settings.logger_lead_min.min, settings.logger_lead_min.max + 1, len(plan))
@@ -579,12 +692,15 @@ def assign_loggers(
     device_index = np.empty(len(plan), dtype=np.int64)
 
     for row in np.lexsort((plan["shipment_id"].to_numpy(), start)):
-        eligible = np.flatnonzero(
-            (free_at <= start[row]) & (valid_from <= start_day[row]) & (valid_to >= end_day[row])
-        )
+        if expired[row]:
+            suitable = valid_to < start_day[row]
+        else:
+            suitable = (valid_from <= start_day[row]) & (valid_to >= end_day[row])
+        eligible = np.flatnonzero((free_at <= start[row]) & suitable)
         if len(eligible) == 0:
+            kind = "expired" if expired[row] else "calibrated"
             raise GenerationError(
-                f"No free, calibrated device for {plan['shipment_id'].iloc[row]}; "
+                f"No free, {kind} device for {plan['shipment_id'].iloc[row]}; "
                 "increase the scale's devices or calibration validity"
             )
         chosen = eligible[rng.integers(len(eligible))]
@@ -611,26 +727,29 @@ def generate_shipment_tables(
     config: AppConfig,
     reference: ReferenceData,
     master: dict[TableName, pd.DataFrame],
-    count: int,
+    plan: pd.DataFrame,
+    flags: ShipmentFlags,
     rngs: dict[str, np.random.Generator],
 ) -> dict[TableName, pd.DataFrame]:
-    """Generate shipments, shipment_lots, route_stops and loggers.
+    """Generate shipments, shipment_lots, route_stops and loggers from a shipment plan.
 
     Args:
         config: Validated configuration.
         reference: Reference data.
         master: Master tables (parties, threshold_policies, products, packaging, lots, devices).
-        count: Number of shipments.
-        rngs: One generator per key of :data:`STAGES`.
+        plan: Output of :func:`plan_shipments` (possibly adjusted by the scenario stage).
+        flags: Scenario flags aligned with ``plan``.
+        rngs: One generator per key of :data:`STAGES` except ``plan``.
 
     Returns:
-        The four tables, keyed by :class:`TableName`, with exactly their schema columns in
-        schema order (dtypes are normalised by the caller, see :mod:`coldchain.generate`).
+        The four tables, keyed by :class:`TableName`, with their schema columns in schema order
+        (dtypes are normalised by the caller, see :mod:`coldchain.generate`). The ``shipments``
+        frame has every column except ``carrier_reported_status``, which the caller derives
+        from the expected outcome before the table is validated.
     """
     parties = master[TableName.PARTIES]
-    plan = plan_shipments(config, count, parties, master[TableName.PRODUCTS], rngs["plan"])
-    stops = plan_routes(config, plan, parties, reference, rngs["routes"])
-    plan, stops = schedule_trips(config, plan, stops, rngs["routes"])
+    stops = plan_routes(config, plan, parties, reference, rngs["routes"], flags.long_dwell)
+    plan, stops = schedule_trips(config, plan, stops, rngs["routes"], flags)
     plan["packaging_id"] = choose_packaging(
         plan, master[TableName.PACKAGING], rngs["packaging"]
     ).to_numpy()
@@ -638,14 +757,17 @@ def generate_shipment_tables(
         plan, master[TableName.THRESHOLD_POLICIES]
     ).to_numpy()
 
-    shipments = plan.assign(carrier_reported_status=CarrierReportedStatus.PASS.value)
     route_stops = stops.assign(stop_id=ids.route_stop_ids(stops["shipment_id"], stops["sequence"]))
     tables = {
-        TableName.SHIPMENTS: shipments,
+        TableName.SHIPMENTS: plan,
         TableName.SHIPMENT_LOTS: allocate_lots(
             config, plan, master[TableName.PRODUCTS], master[TableName.LOTS], rngs["lots"]
         ),
         TableName.ROUTE_STOPS: route_stops,
-        TableName.LOGGERS: assign_loggers(config, plan, master[TableName.DEVICES], rngs["loggers"]),
+        TableName.LOGGERS: assign_loggers(
+            config, plan, master[TableName.DEVICES], rngs["loggers"], flags.expired_device
+        ),
     }
-    return {name: frame[list(SCHEMAS[name].columns)] for name, frame in tables.items()}
+    columns = {name: list(SCHEMAS[name].columns) for name in tables}
+    columns[TableName.SHIPMENTS].remove("carrier_reported_status")
+    return {name: frame[columns[name]] for name, frame in tables.items()}

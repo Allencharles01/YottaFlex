@@ -19,10 +19,11 @@ from coldchain.config import (
     load_config,
     load_reference,
 )
-from coldchain.enums import Layer, Scale
+from coldchain.enums import Scale
 from coldchain.errors import ColdchainError
-from coldchain.generate import generate_master_tables
-from coldchain.io import layer_dir, write_tables
+from coldchain.generate import generate_tables
+from coldchain.io import write_layers
+from coldchain.schemas import TABLE_LAYERS
 
 app = typer.Typer(
     name="coldchain",
@@ -77,10 +78,16 @@ def generate(
     ] = DEFAULT_CONFIG_PATH,
     output_dir: Annotated[
         Path,
-        typer.Option("--output-dir", help="Output root; tables go to <root>/<scale>/raw."),
+        typer.Option(
+            "--output-dir", help="Output root; tables go to <root>/<scale>/{raw,ground_truth}."
+        ),
     ] = DEFAULT_OUTPUT_DIR,
 ) -> None:
-    """Generate the master data (parties … loggers) into ``<output-dir>/<scale>/raw/``."""
+    """Generate master data, events and natural scenarios, plus the ground truth.
+
+    Raw tables go to ``<output-dir>/<scale>/raw/``; ``expected_outcomes`` and
+    ``device_truth`` go to ``<output-dir>/<scale>/ground_truth/``.
+    """
 
     def body() -> None:
         config = load_config(config_path)
@@ -89,11 +96,12 @@ def generate(
         logger.info(
             "Generating scale=%s seed=%d (config %s)", scale.value, config.seed, config_path
         )
-        tables = generate_master_tables(config, load_reference(), scale)
-        target = layer_dir(output_dir, scale.value, Layer.RAW)
-        write_tables(tables, target)
+        tables = generate_tables(config, load_reference(), scale)
+        written = write_layers(tables, output_dir, scale.value)
         for name, frame in tables.items():
-            logger.info("  %-24s %8d rows", name.value, len(frame))
-        logger.info("Wrote %d tables (Parquet + CSV) to %s", len(tables), target)
+            logger.info("  %-13s %-24s %8d rows", TABLE_LAYERS[name].value, name.value, len(frame))
+        for layer, target in written.items():
+            count = sum(TABLE_LAYERS[name] is layer for name in tables)
+            logger.info("Wrote %d %s tables (Parquet + CSV) to %s", count, layer.value, target)
 
     _run(body)

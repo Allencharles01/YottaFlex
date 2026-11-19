@@ -14,7 +14,7 @@ a single-column foreign key (resolved by `policy_code` + effective date).
 |---|---|
 | raw (generator input) | parties, threshold_policies, products, packaging, lots, devices, shipments, shipment_lots, loggers, temperature_readings, route_stops, custody_events, shipment_status_events |
 | compliance (engine output) | excursion_reports, excursion_report_readings, compliance_decisions, compliance_status_events |
-| ground_truth (answer key) | expected_outcomes, anomalies |
+| ground_truth (answer key) | expected_outcomes, device_truth, anomalies |
 
 ## Diagram
 
@@ -55,6 +55,7 @@ erDiagram
     shipments ||--o{ compliance_status_events : "review history"
 
     shipments ||--|| expected_outcomes : "expected (ground truth)"
+    devices ||--|| device_truth : "true offset (ground truth)"
     shipments ||--o{ anomalies : "injected (ground truth)"
 
     parties {
@@ -227,6 +228,10 @@ erDiagram
         string expected_excursion_windows
         string expected_excursion_durations_min
     }
+    device_truth {
+        string device_id PK, FK
+        float systematic_offset_c
+    }
     anomalies {
         string anomaly_id PK
         string shipment_id PK, FK
@@ -249,5 +254,5 @@ erDiagram
   `temperature_readings`.
 - **History is append-only:** generator lifecycle events live in raw `shipment_status_events`; the
   engine appends its own events to `compliance_status_events` and never rewrites raw files.
-- **Ground truth is isolated:** `expected_outcomes` and `anomalies` reference shipments but are
-  never read by the compliance engine.
+- **Ground truth is isolated:** `expected_outcomes` and `anomalies` reference shipments, and
+  `device_truth` references devices, but none of them is ever read by the compliance engine.

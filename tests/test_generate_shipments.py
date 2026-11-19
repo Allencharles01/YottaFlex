@@ -5,13 +5,14 @@ import pandas as pd
 import pytest
 
 from coldchain.config import parse_config
-from coldchain.enums import LotStatus, StopType, TableName
+from coldchain.enums import LotStatus, Scenario, StopType, TableName
 from coldchain.errors import GenerationError
-from coldchain.generate import generate_master_tables, shipments
+from coldchain.generate import generate_tables, shipments
+from coldchain.io import raw_tables
 from coldchain.rng import stage_rng
 from coldchain.schemas import FOREIGN_KEYS, PRIMARY_KEYS, SCHEMAS, effective_policy_ids
 
-GENERATED = (
+MASTER_AND_SHIPMENTS = (
     TableName.PARTIES,
     TableName.THRESHOLD_POLICIES,
     TableName.PRODUCTS,
@@ -23,6 +24,14 @@ GENERATED = (
     TableName.ROUTE_STOPS,
     TableName.LOGGERS,
 )
+"""The Phase 2 tables, which this module tests (events and scenarios: test_generate_events.py)."""
+
+GENERATED = MASTER_AND_SHIPMENTS
+
+
+def _scenario_shipments(tables, scenario: Scenario) -> set[str]:
+    outcomes = tables[TableName.EXPECTED_OUTCOMES]
+    return set(outcomes.loc[outcomes["scenario"] == scenario, "shipment_id"])
 
 
 def _utc(value: str) -> pd.Timestamp:
@@ -34,8 +43,12 @@ def _utc(value: str) -> pd.Timestamp:
 # --------------------------------------------------------------------------------------------
 
 
-def test_stage_produces_exactly_the_master_tables(starter_tables) -> None:
-    assert tuple(starter_tables) == GENERATED
+def test_generator_produces_every_raw_table_then_the_ground_truth(starter_tables) -> None:
+    assert tuple(starter_tables) == (
+        *raw_tables(),
+        TableName.EXPECTED_OUTCOMES,
+        TableName.DEVICE_TRUTH,
+    )
 
 
 @pytest.mark.parametrize("table", GENERATED)
@@ -70,20 +83,25 @@ def test_starter_volumes(starter_tables, app_config) -> None:
 
 
 def test_same_seed_gives_identical_tables(app_config, reference, starter_tables) -> None:
-    again = generate_master_tables(app_config, reference, "starter")
-    for table in GENERATED:
+    again = generate_tables(app_config, reference, "starter")
+    assert tuple(again) == tuple(starter_tables)
+    for table in starter_tables:
         pd.testing.assert_frame_equal(again[table], starter_tables[table])
 
 
 def test_different_seed_gives_different_shipments(app_config, reference, starter_tables) -> None:
-    other = generate_master_tables(app_config.model_copy(update={"seed": 1}), reference, "starter")
+    other = generate_tables(app_config.model_copy(update={"seed": 1}), reference, "starter")
     assert not other[TableName.SHIPMENTS].equals(starter_tables[TableName.SHIPMENTS])
 
 
 def test_streams_are_independent(raw_config, reference, starter_tables) -> None:
-    """Changing the device count only changes the tables that use devices."""
+    """Changing the device count only changes the tables that use devices.
+
+    Devices also decide which shipments can host CALIBRATION_EXPIRED; with the default seed the
+    extra devices do not change that choice, so every shipment-plan table stays identical.
+    """
     raw_config["scales"]["starter"]["devices"] = 30
-    other = generate_master_tables(parse_config(raw_config), reference, "starter")
+    other = generate_tables(parse_config(raw_config), reference, "starter")
     for table in GENERATED:
         if table in (TableName.DEVICES, TableName.LOGGERS):
             continue
@@ -138,8 +156,13 @@ def test_parties_active_before_every_shipment(starter_tables) -> None:
         assert (active.loc[ships[column]].to_numpy() <= earliest.to_numpy()).all()
 
 
-def test_carrier_reports_pass_in_baseline(starter_tables) -> None:
-    assert (starter_tables[TableName.SHIPMENTS]["carrier_reported_status"] == "PASS").all()
+def test_carrier_claim_follows_expected_action(starter_tables) -> None:
+    """DECISIONS.md #38: PASS exactly when the expected action is RELEASE."""
+    ships = starter_tables[TableName.SHIPMENTS].set_index("shipment_id")
+    outcomes = starter_tables[TableName.EXPECTED_OUTCOMES].set_index("shipment_id")
+    passed = ships["carrier_reported_status"] == "PASS"
+    assert (passed == (outcomes.loc[ships.index, "expected_action"] == "RELEASE")).all()
+    assert (~passed).any()
 
 
 def _shipment_classes(tables) -> pd.DataFrame:
@@ -264,10 +287,17 @@ def test_route_times_chronological_and_match_shipment(starter_tables, app_config
     events["order"] = events["sequence"] * 2 + (events["variable"] == "departed_at")
     events = events.sort_values(["shipment_id", "order"])
     assert (events.groupby("shipment_id")["value"].diff().dropna() > pd.Timedelta(0)).all()
-    dwell = stops["dwell_min"].dropna()
-    assert dwell.between(
+    long_dwell = _scenario_shipments(starter_tables, Scenario.LONG_DWELL)
+    baseline = stops[~stops["shipment_id"].isin(long_dwell)]["dwell_min"].dropna()
+    assert baseline.between(
         app_config.generation.routes.dwell_min.min, app_config.long_dwell_threshold_min
     ).all()
+    # Every LONG_DWELL shipment has exactly one stop above the threshold, inside the range.
+    scenario_stops = stops[stops["shipment_id"].isin(long_dwell)]
+    above = scenario_stops[scenario_stops["dwell_min"] > app_config.long_dwell_threshold_min]
+    assert sorted(above["shipment_id"]) == sorted(long_dwell)
+    bounds = app_config.generation.scenarios.long_dwell_min
+    assert above["dwell_min"].between(bounds.min, bounds.max).all()
 
 
 # --------------------------------------------------------------------------------------------
@@ -294,13 +324,21 @@ def test_no_device_has_overlapping_assignments(starter_tables, app_config) -> No
     assert loggers["device_id"].duplicated().any()  # devices really are reused
 
 
-def test_device_calibration_covers_every_assignment(starter_tables) -> None:
+def test_device_calibration_covers_every_assignment_except_expired_scenario(
+    starter_tables,
+) -> None:
+    expired = _scenario_shipments(starter_tables, Scenario.CALIBRATION_EXPIRED)
     loggers = starter_tables[TableName.LOGGERS]
     devices = starter_tables[TableName.DEVICES].set_index("device_id").loc[loggers["device_id"]]
-    assert (devices["calibrated_on"].to_numpy() <= loggers["assigned_at"].dt.date.to_numpy()).all()
-    assert (
+    covered = (devices["calibrated_on"].to_numpy() <= loggers["assigned_at"].dt.date.to_numpy()) & (
         devices["calibration_due_on"].to_numpy() >= loggers["unassigned_at"].dt.date.to_numpy()
-    ).all()
+    )
+    assert expired
+    assert set(loggers.loc[~covered, "shipment_id"]) == expired
+    # CALIBRATION_EXPIRED devices were already past due when assigned (DECISIONS.md).
+    is_expired = loggers["shipment_id"].isin(expired).to_numpy()
+    due = devices["calibration_due_on"].to_numpy()[is_expired]
+    assert (due < loggers["assigned_at"].dt.date.to_numpy()[is_expired]).all()
 
 
 # --------------------------------------------------------------------------------------------
@@ -407,6 +445,96 @@ def test_assign_loggers_skips_devices_whose_calibration_expires(app_config) -> N
         shipments.assign_loggers(app_config, plan, _devices(date(2026, 3, 1)), stage_rng(1, "x"))
 
 
+def test_assign_loggers_gives_expired_flag_an_already_expired_device(app_config) -> None:
+    plan = _plan(
+        [
+            ("SHP-2026-000001", "2026-03-01T08:00", "2026-03-02T08:00"),
+            ("SHP-2026-000002", "2026-03-01T09:00", "2026-03-02T09:00"),
+        ]
+    )
+    devices = _devices(date(2026, 2, 1), date(2027, 1, 1), date(2026, 3, 1))
+    for seed in range(5):
+        loggers = shipments.assign_loggers(
+            app_config, plan, devices, stage_rng(seed, "x"), np.array([True, False])
+        )
+        # DEV-000003 expires during the trip: neither valid nor already past due.
+        assert loggers["device_id"].tolist() == ["DEV-000001", "DEV-000002"]
+    with pytest.raises(GenerationError, match="No free, expired device for SHP-2026-000001"):
+        shipments.assign_loggers(
+            app_config, plan, _devices(date(2027, 1, 1)), stage_rng(1, "x"), np.array([True, False])
+        )
+
+
+def test_long_dwell_flag_needs_an_intermediate_stop(app_config) -> None:
+    plan = _plan([("SHP-2026-000001", "2026-03-01T08:00", "2026-03-02T08:00")])
+    stops = pd.DataFrame(
+        {
+            "shipment_id": ["SHP-2026-000001"] * 2,
+            "sequence": [1, 2],
+            "stop_type": ["ORIGIN", "DESTINATION"],
+            "party_id": ["PTY-0001", "PTY-0004"],
+            "leg_km": [0.0, 100.0],
+        }
+    )
+    plan = plan.assign(planned_departure_at=plan["actual_departure_at"])
+    flags = shipments.ShipmentFlags.baseline(app_config, 1)
+    flags = shipments.ShipmentFlags(
+        long_dwell=np.array([True]),
+        expired_device=flags.expired_device,
+        min_departure_delay_min=flags.min_departure_delay_min,
+    )
+    with pytest.raises(GenerationError, match="LONG_DWELL shipments without an intermediate"):
+        shipments.schedule_trips(app_config, plan, stops, stage_rng(1, "x"), flags)
+
+
+def test_minimum_departure_delay_is_respected(app_config) -> None:
+    plan = _plan([("SHP-2026-000001", "2026-03-01T08:00", "2026-03-02T08:00")])
+    plan = plan.assign(planned_departure_at=plan["actual_departure_at"])
+    stops = pd.DataFrame(
+        {
+            "shipment_id": ["SHP-2026-000001"] * 2,
+            "sequence": [1, 2],
+            "stop_type": ["ORIGIN", "DESTINATION"],
+            "party_id": ["PTY-0001", "PTY-0004"],
+            "leg_km": [0.0, 100.0],
+        }
+    )
+    base = shipments.ShipmentFlags.baseline(app_config, 1)
+    flags = shipments.ShipmentFlags(base.long_dwell, base.expired_device, np.array([115]))
+    for seed in range(5):
+        scheduled, _ = shipments.schedule_trips(
+            app_config, plan, stops, stage_rng(seed, "x"), flags
+        )
+        delay = scheduled["actual_departure_at"] - scheduled["planned_departure_at"]
+        assert (delay >= pd.Timedelta(minutes=115)).all()
+
+
+def test_minimum_trip_stretches_the_plan_and_is_bounded(app_config) -> None:
+    plan = _plan([("SHP-2026-000001", "2026-03-01T08:00", "2026-03-02T08:00")])
+    plan = plan.assign(planned_departure_at=plan["actual_departure_at"])
+    stops = pd.DataFrame(
+        {
+            "shipment_id": ["SHP-2026-000001"] * 2,
+            "sequence": [1, 2],
+            "stop_type": ["ORIGIN", "DESTINATION"],
+            "party_id": ["PTY-0001", "PTY-0004"],
+            "leg_km": [0.0, 100.0],  # 120 min of driving: clipped up to the 240-min minimum
+        }
+    )
+    base = shipments.ShipmentFlags.baseline(app_config, 1)
+    stretched = shipments.ShipmentFlags(
+        base.long_dwell, base.expired_device, base.min_departure_delay_min, np.array([600])
+    )
+    scheduled, _ = shipments.schedule_trips(app_config, plan, stops, stage_rng(1, "x"), stretched)
+    planned = scheduled["planned_arrival_at"] - scheduled["planned_departure_at"]
+    assert (planned == pd.Timedelta(minutes=600)).all()
+    too_long = shipments.ShipmentFlags(
+        base.long_dwell, base.expired_device, base.min_departure_delay_min, np.array([72 * 60 + 1])
+    )
+    with pytest.raises(GenerationError, match=r"longer than trip_duration_hours\.max"):
+        shipments.schedule_trips(app_config, plan, stops, stage_rng(1, "x"), too_long)
+
+
 def test_assign_loggers_due_date_is_inclusive(app_config) -> None:
     plan = _plan([("SHP-2026-000001", "2026-03-01T08:00", "2026-03-02T08:00")])
     loggers = shipments.assign_loggers(
@@ -457,18 +585,29 @@ def test_planned_dwell_that_leaves_no_drive_time_is_rejected(raw_config, referen
     raw_config["trip_duration_hours"] = {"min": 1, "max": 2}
     raw_config["generation"]["routes"]["intermediate_stops"] = {"min": 3, "max": 3}
     with pytest.raises(GenerationError, match="no drive time"):
-        generate_master_tables(parse_config(raw_config), reference, "starter")
+        generate_tables(parse_config(raw_config), reference, "starter")
 
 
 def test_same_city_trip_gets_the_minimum_duration(raw_config, reference, app_config) -> None:
-    """With no hubs and every party in one city, every planned trip is clipped to the minimum."""
+    """With no hubs and every party in one city, every planned trip is clipped to the minimum.
+
+    The exception is a CUMULATIVE_DURATION breach, whose trip is stretched to fit its design.
+    """
     raw_config["generation"]["routes"]["intermediate_stops"] = {"min": 0, "max": 0}
+    weights = raw_config["scenario_weights"]
+    weights["NORMAL"] += weights["LONG_DWELL"]  # LONG_DWELL needs an intermediate stop
+    weights["LONG_DWELL"] = 0.0
     config = parse_config(raw_config)
     one_city = reference.model_copy(
         update={"locations": tuple(loc for loc in reference.locations if loc.city == "Mumbai")}
     )
-    tables = generate_master_tables(config, one_city, "starter")
+    tables = generate_tables(config, one_city, "starter")
     ships = tables[TableName.SHIPMENTS]
     hours = (ships["planned_arrival_at"] - ships["planned_departure_at"]).dt.total_seconds() / 3600
-    assert (hours == app_config.trip_duration_hours.min).all()
+    outcomes = tables[TableName.EXPECTED_OUTCOMES].set_index("shipment_id")
+    codes = outcomes.loc[ships["shipment_id"], "expected_reason_codes"].fillna("")
+    stretched = codes.str.contains("CUMULATIVE_DURATION_BREACH").to_numpy()
+    assert stretched.sum() == 1
+    assert (hours[~stretched] == app_config.trip_duration_hours.min).all()
+    assert (hours[stretched] > app_config.trip_duration_hours.min).all()
     assert (tables[TableName.ROUTE_STOPS].groupby("shipment_id").size() == 2).all()

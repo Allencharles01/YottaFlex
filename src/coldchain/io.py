@@ -237,6 +237,33 @@ def write_tables(
     return {name: write_table(name, frame, directory, formats) for name, frame in tables.items()}
 
 
+def write_layers(
+    tables: Mapping[TableName, pd.DataFrame],
+    output_root: Path,
+    scale: str,
+    formats: Iterable[FileFormat] = DEFAULT_FORMATS,
+) -> dict[Layer, Path]:
+    """Write tables into their layer directories, e.g. ``raw/`` and ``ground_truth/``.
+
+    Args:
+        tables: Frames keyed by table (any mix of layers).
+        output_root: Output root (``output/`` by default in the CLI).
+        scale: Scale name (sub-directory of the root).
+        formats: File formats to write.
+
+    Returns:
+        The directory written for every layer that had tables.
+    """
+    formats = tuple(formats)
+    written: dict[Layer, Path] = {}
+    for layer in Layer:
+        members = {name: frame for name, frame in tables.items() if TABLE_LAYERS[name] is layer}
+        if members:
+            written[layer] = layer_dir(output_root, scale, layer)
+            write_tables(members, written[layer], formats)
+    return written
+
+
 def read_table(
     table: TableName,
     directory: Path,

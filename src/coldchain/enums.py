@@ -168,6 +168,21 @@ class Scenario(StrEnum):
     CALIBRATION_EXPIRED = "CALIBRATION_EXPIRED"
 
 
+class ScenarioVariant(StrEnum):
+    """How a scenario is shaped (generator-internal; the ground truth records the scenario).
+
+    ``NONE`` is used by scenarios with a single shape (NORMAL, LONG_DWELL, CALIBRATION_EXPIRED).
+    """
+
+    NONE = "NONE"
+    SPIKE = "SPIKE"
+    AT_LIMIT = "AT_LIMIT"
+    EXACT_ALLOWANCE = "EXACT_ALLOWANCE"
+    SINGLE_DURATION = "SINGLE_DURATION"
+    ABSOLUTE_LIMIT = "ABSOLUTE_LIMIT"
+    CUMULATIVE_DURATION = "CUMULATIVE_DURATION"
+
+
 class IssueType(StrEnum):
     """Deliberately injected edge-case types (ground-truth anomalies)."""
 
@@ -214,6 +229,7 @@ class TableName(StrEnum):
     COMPLIANCE_DECISIONS = "compliance_decisions"
     COMPLIANCE_STATUS_EVENTS = "compliance_status_events"
     EXPECTED_OUTCOMES = "expected_outcomes"
+    DEVICE_TRUTH = "device_truth"
     ANOMALIES = "anomalies"
 
 

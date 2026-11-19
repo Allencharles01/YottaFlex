@@ -141,7 +141,7 @@ A physical temperature logger, reused across shipments (DECISIONS.md #1).
 | `planned_arrival_at` | timestamp | yes | UTC | — | no | S: after `planned_departure_at`. V: trip duration within config `trip_duration_hours`. |
 | `actual_departure_at` | timestamp | yes | UTC | — | no | V: = ORIGIN stop `departed_at`; ≥ logger `assigned_at`. |
 | `actual_arrival_at` | timestamp | yes | UTC | — | no | S: after `actual_departure_at`. V: = DESTINATION stop `arrived_at`; ≤ logger `unassigned_at`. |
-| `carrier_reported_status` | string | yes | PASS, FAIL | — | no | S: enum. E: contradicts the engine's action → CARRIER_STATUS_CONTRADICTED (an input claim, may be wrong). |
+| `carrier_reported_status` | string | yes | PASS, FAIL | — | no | S: enum. Generator: PASS exactly when the expected action is RELEASE (DECISIONS.md #38). E: contradicts the engine's action → CARRIER_STATUS_CONTRADICTED (an input claim, may be wrong). |
 
 ### `shipment_lots`
 
@@ -231,7 +231,7 @@ Append-only lifecycle history (never updated in place).
 | `shipment_id` | string | yes | `SHP-2026-000001` | — | with `sequence` | V: FK → `shipments`. |
 | `sequence` | integer | yes | 1–99 | — | with `shipment_id` | V: contiguous 1..n. |
 | `status` | string | yes | PLANNED, PICKED_UP, IN_TRANSIT, AT_STOP, DELIVERED | — | no | S: generator statuses only. V: transitions follow the lifecycle below. |
-| `event_at` | timestamp | yes | UTC | — | no | V: non-decreasing with `sequence`; PICKED_UP = `actual_departure_at`, DELIVERED = `actual_arrival_at`. |
+| `event_at` | timestamp | yes | UTC | — | no | V: non-decreasing with `sequence`; PLANNED = `planned_departure_at` − `planning_lead_hours` (config); PICKED_UP = `actual_departure_at`, DELIVERED = `actual_arrival_at`; AT_STOP / IN_TRANSIT = the stop's `arrived_at` / `departed_at`. |
 | `actor_party_id` | string | yes | `PTY-0001` | — | no | V: FK → `parties`; PLANNED → planner, PICKED_UP/IN_TRANSIT → carrier, AT_STOP → the stop's party, DELIVERED → receiver. |
 
 ---
@@ -330,6 +330,20 @@ The expected engine result per shipment, derived from the documented rules (not 
 | `expected_excursion_windows` | string | no | `\|`-list of `<start>/<end>` (ISO-8601 UTC, first/last reading); null = none | — | no | S: format; each end ≥ start. |
 | `expected_excursion_durations_min` | string | no | `\|`-list of integers, aligned with the windows; null = none | min | no | S: format. |
 
+### `device_truth`
+
+**Layer:** ground_truth · **Primary key:** `device_id` · **Written by:** generator
+
+The hidden systematic offset of every physical device, used by the temperature model
+(DECISIONS.md #54). It explains why one device reads consistently warm or cold. It is ground
+truth only: the compliance engine never reads it, because a real engine cannot know a sensor's
+true bias, only its stated `uncertainty_c`.
+
+| Field | Type | Required | Allowed values / format | Unit | Unique | Validation rule |
+|---|---|---|---|---|---|---|
+| `device_id` | string | yes | `DEV-000001` | — | PK | V: FK → `devices`; one row per device. |
+| `systematic_offset_c` | float | yes | −1.00 to 1.00, 2 dp | °C | no | S: range, 2 dp. V: \|offset\| ≤ the device's `uncertainty_c`. |
+
 ### `anomalies`
 
 **Layer:** ground_truth · **Primary key:** (`anomaly_id`, `shipment_id`) · **Written by:** injector
@@ -381,6 +395,7 @@ may exist without the relationship, or the parent may have zero children.
 | `shipments` | `compliance_decisions.shipment_id` | 1 : 1 | — | |
 | `shipments` | `compliance_status_events.shipment_id` | 1 : N (1–2) | — | |
 | `shipments` | `expected_outcomes.shipment_id` | 1 : 1 | — | Ground truth. |
+| `devices` | `device_truth.device_id` | 1 : 1 | — | Ground truth (hidden sensor offset). |
 | `shipments` | `anomalies.shipment_id` | 1 : N (0 or 1 in practice) | most shipments have none | Ground truth. |
 
 ## Effective dates

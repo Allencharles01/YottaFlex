@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from coldchain import __version__
 from coldchain.cli import app
-from coldchain.enums import TableName
 from coldchain.io import raw_tables
 
 runner = CliRunner()
@@ -44,31 +43,26 @@ def generated(tmp_path_factory) -> Path:
     return root / "starter" / "raw"
 
 
-MASTER_TABLES = [
-    t
-    for t in raw_tables()
-    if t
-    in {
-        TableName.PARTIES,
-        TableName.THRESHOLD_POLICIES,
-        TableName.PRODUCTS,
-        TableName.PACKAGING,
-        TableName.LOTS,
-        TableName.DEVICES,
-        TableName.SHIPMENTS,
-        TableName.SHIPMENT_LOTS,
-        TableName.ROUTE_STOPS,
-        TableName.LOGGERS,
-    }
-]
-
-
-def test_generate_writes_parquet_and_csv_for_every_master_table(generated: Path) -> None:
+def test_generate_writes_parquet_and_csv_for_every_raw_table(generated: Path) -> None:
     names = {p.name for p in generated.iterdir()}
-    for table in MASTER_TABLES:
+    for table in raw_tables():
         assert f"{table.value}.csv" in names
         assert f"{table.value}.parquet" in names
-    assert len(names) == 2 * len(MASTER_TABLES)
+    assert len(names) == 2 * len(raw_tables())
+
+
+def test_generate_writes_ground_truth_tables_to_ground_truth_only(generated: Path) -> None:
+    ground_truth = generated.parent / "ground_truth"
+    assert sorted(p.name for p in ground_truth.iterdir()) == [
+        "device_truth.csv",
+        "device_truth.parquet",
+        "expected_outcomes.csv",
+        "expected_outcomes.parquet",
+    ]
+    outcomes = pd.read_csv(ground_truth / "expected_outcomes.csv")
+    assert len(outcomes) == 50
+    assert len(pd.read_csv(ground_truth / "device_truth.csv")) == 20
+    assert not any("expected" in p.name or "truth" in p.name for p in generated.iterdir())
 
 
 def test_generate_writes_fifty_shipments_with_one_logger_each(generated: Path) -> None:
@@ -80,8 +74,10 @@ def test_generate_writes_fifty_shipments_with_one_logger_each(generated: Path) -
 
 def test_generate_is_byte_identical_on_rerun(tmp_path: Path, generated: Path) -> None:
     assert _generate(tmp_path).exit_code == 0
-    for path in generated.iterdir():
-        assert (tmp_path / "starter" / "raw" / path.name).read_bytes() == path.read_bytes(), path
+    for layer in ("raw", "ground_truth"):
+        for path in (generated.parent / layer).iterdir():
+            again = tmp_path / "starter" / layer / path.name
+            assert again.read_bytes() == path.read_bytes(), path
 
 
 def test_seed_option_changes_output(tmp_path: Path, generated: Path) -> None:

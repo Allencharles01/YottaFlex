@@ -286,6 +286,9 @@ def build_valid_tables() -> dict[TableName, pd.DataFrame]:
                 "expected_excursion_durations_min": _str("20"),
             }
         ),
+        TableName.DEVICE_TRUTH: pd.DataFrame(
+            {"device_id": ["DEV-000001"], "systematic_offset_c": [-0.12]}
+        ),
         TableName.ANOMALIES: pd.DataFrame(
             {
                 "anomaly_id": ["ANOM-000001"],
@@ -336,7 +339,7 @@ def reference():
 
 @pytest.fixture(scope="session")
 def starter_tables(app_config, reference) -> dict[TableName, pd.DataFrame]:
-    """Master and shipment tables generated at starter scale with the default seed."""
-    from coldchain.generate import generate_master_tables
+    """Every generated table (raw + expected outcomes) at starter scale with the default seed."""
+    from coldchain.generate import generate_tables
 
-    return generate_master_tables(app_config, reference, "starter")
+    return generate_tables(app_config, reference, "starter")

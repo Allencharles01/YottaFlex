@@ -13,7 +13,7 @@ injection_rates: { logger_not_assigned: 0.01, product_threshold_mismatch: 0.01,
                    excursion_across_unrelated_shipments: 0.01 }
 long_dwell_threshold_min: 120
 
-# Master-data generation (Phase 2). Ranges are inclusive. Validated on load by coldchain.config.
+# Data generation (master data: Phase 2; events and scenarios: Phase 3). Ranges are inclusive. Validated on load by coldchain.config.
 generation:
   # Number of parties per party_type (the brief's actors, represented as data).
   parties: { SUPPLIER: 6, CARRIER: 4, WAREHOUSE: 6, RECEIVER: 15, PLANNER: 3,
@@ -48,3 +48,19 @@ generation:
   departure_delay_min: { min: -20, max: 120 }     # actual - planned departure
   logger_lead_min: { min: 10, max: 60 }           # logger assigned this long before departure
   logger_tail_min: { min: 10, max: 60 }           # logger unassigned this long after arrival
+  planning_lead_hours: { min: 24, max: 336 }      # PLANNED status event this long before planned departure
+  scenarios:                                      # how natural scenarios shape a shipment
+    long_dwell_min: { min: 150, max: 360 }        # LONG_DWELL: one stop dwells this long (> long_dwell_threshold_min)
+    breach_extra_readings: { min: 1, max: 6 }     # SINGLE_DURATION breach: readings beyond the allowance
+    abs_breach_excess_c: { min: 0.5, max: 3.0 }   # ABSOLUTE_LIMIT breach: peak this far beyond abs limit
+    at_limit_readings: { min: 1, max: 3 }         # BOUNDARY AT_LIMIT: consecutive readings exactly at a limit
+    ramp_readings: { min: 2, max: 4 }             # in-range readings ramping toward / away from a designed segment
+    separation_readings: 9                        # in-range readings between two designed segments (>= 2 x ramp_readings.max)
+  readings:                                       # temperature model (PROJECT_PLAN.md 7.1)
+    noise_sd_c: 0.15                              # Gaussian noise per reading
+    drift_amplitude_c: { min: 0.0, max: 0.6 }     # slow sinusoidal drift per shipment
+    drift_period_hours: { min: 6, max: 48 }
+    dwell_warming_c_per_hour: 2.0                 # warming at a stop, x packaging thermal_response
+    max_dwell_warming_c: 2.0                      # cap on dwell warming
+    dwell_recovery_min: 30                        # warming decays with this time constant after departure
+    limit_margin_c: 0.05                          # natural readings stay > uncertainty + this from a limit

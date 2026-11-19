@@ -178,14 +178,61 @@ class RouteGeneration(_StrictModel):
         _require_non_negative("intermediate_stops", self.intermediate_stops)
         if self.intermediate_stops.max > 97:  # route-stop sequences are 2 digits (1..99)
             raise ValueError("intermediate_stops.max must be <= 97")
-        _require_non_negative("dwell_min", self.dwell_min)
+        if self.dwell_min.min < 1:  # the two handoffs at a stop must be strictly ordered
+            raise ValueError("dwell_min.min must be >= 1")
         if self.drive_time_factor.min <= 0:
             raise ValueError("drive_time_factor.min must be > 0")
         return self
 
 
+class ScenarioGeneration(_StrictModel):
+    """How the natural scenarios shape a shipment (Phase 3)."""
+
+    long_dwell_min: IntRange
+    breach_extra_readings: IntRange
+    abs_breach_excess_c: FloatRange
+    at_limit_readings: IntRange
+    ramp_readings: IntRange
+    separation_readings: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> "ScenarioGeneration":
+        if self.breach_extra_readings.min < 1:
+            raise ValueError("breach_extra_readings.min must be >= 1")
+        if self.at_limit_readings.min < 1:
+            raise ValueError("at_limit_readings.min must be >= 1")
+        if self.abs_breach_excess_c.min < 0.01:
+            raise ValueError("abs_breach_excess_c.min must be >= 0.01 (beyond the limit at 2 dp)")
+        if self.ramp_readings.min < 1:
+            raise ValueError("ramp_readings.min must be >= 1")
+        if self.separation_readings < 2 * self.ramp_readings.max:
+            raise ValueError(
+                "separation_readings must be >= 2 x ramp_readings.max so ramps never overlap"
+            )
+        return self
+
+
+class ReadingGeneration(_StrictModel):
+    """Parameters of the temperature model (Phase 3)."""
+
+    noise_sd_c: float = Field(ge=0)
+    drift_amplitude_c: FloatRange
+    drift_period_hours: FloatRange
+    dwell_warming_c_per_hour: float = Field(ge=0)
+    max_dwell_warming_c: float = Field(ge=0)
+    dwell_recovery_min: float = Field(gt=0)
+    limit_margin_c: float = Field(ge=0.01)
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> "ReadingGeneration":
+        _require_non_negative("drift_amplitude_c", self.drift_amplitude_c)
+        if self.drift_period_hours.min <= 0:
+            raise ValueError("drift_period_hours.min must be > 0")
+        return self
+
+
 class GenerationConfig(_StrictModel):
-    """Knobs of the master-data generator (Phase 2)."""
+    """Knobs of the data generator (master data: Phase 2; events and scenarios: Phase 3)."""
 
     parties: dict[PartyType, int]
     party_name_labels: dict[PartyType, str]
@@ -197,6 +244,9 @@ class GenerationConfig(_StrictModel):
     departure_delay_min: IntRange
     logger_lead_min: IntRange
     logger_tail_min: IntRange
+    planning_lead_hours: IntRange
+    scenarios: ScenarioGeneration
+    readings: ReadingGeneration
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "GenerationConfig":
@@ -214,6 +264,16 @@ class GenerationConfig(_StrictModel):
             raise ValueError("lots_per_shipment.min must be >= 1")
         _require_non_negative("logger_lead_min", self.logger_lead_min)
         _require_non_negative("logger_tail_min", self.logger_tail_min)
+        if self.planning_lead_hours.min * 60 < max(0, -self.departure_delay_min.min):
+            raise ValueError(
+                "planning_lead_hours.min must cover the earliest departure "
+                "(PLANNED must not come after PICKED_UP)"
+            )
+        if self.planning_lead_hours.max > self.party_active_lead_days.min * 24:
+            raise ValueError(
+                "planning_lead_hours.max must be <= party_active_lead_days.min x 24 "
+                "(planners are active before they plan)"
+            )
         return self
 
 
@@ -239,6 +299,19 @@ class AppConfig(_StrictModel):
             raise ValueError(
                 "generation.routes.dwell_min.max must be <= long_dwell_threshold_min "
                 "(baseline stops never trigger LONG_DWELL)"
+            )
+        if self.generation.scenarios.long_dwell_min.min <= self.long_dwell_threshold_min:
+            raise ValueError(
+                "generation.scenarios.long_dwell_min.min must be > long_dwell_threshold_min "
+                "(a LONG_DWELL stop must trigger the warning)"
+            )
+        if (
+            self.scenario_weights[Scenario.LONG_DWELL] > 0
+            and self.generation.routes.intermediate_stops.max < 1
+        ):
+            raise ValueError(
+                "LONG_DWELL needs an intermediate stop: set "
+                "generation.routes.intermediate_stops.max >= 1 or its scenario weight to 0"
             )
         if self.generation.devices.turnaround_min < self.reading_interval_min:
             raise ValueError(

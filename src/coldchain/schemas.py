@@ -493,6 +493,7 @@ PRIMARY_KEYS: dict[TableName, tuple[str, ...]] = {
     TableName.COMPLIANCE_DECISIONS: ("shipment_id",),
     TableName.COMPLIANCE_STATUS_EVENTS: ("status_event_id",),
     TableName.EXPECTED_OUTCOMES: ("shipment_id",),
+    TableName.DEVICE_TRUTH: ("device_id",),
     TableName.ANOMALIES: ("anomaly_id", "shipment_id"),
 }
 """Primary key columns of every table (also the sort order before writing)."""
@@ -526,6 +527,7 @@ TABLE_LAYERS: dict[TableName, Layer] = {
         )
     },
     TableName.EXPECTED_OUTCOMES: Layer.GROUND_TRUTH,
+    TableName.DEVICE_TRUTH: Layer.GROUND_TRUTH,
     TableName.ANOMALIES: Layer.GROUND_TRUTH,
 }
 """Output layer of every table. Raw tables never contain ground-truth labels."""
@@ -573,6 +575,7 @@ FOREIGN_KEYS: tuple[tuple[TableName, str, TableName, str], ...] = (
     (TableName.COMPLIANCE_STATUS_EVENTS, "shipment_id", TableName.SHIPMENTS, "shipment_id"),
     (TableName.COMPLIANCE_STATUS_EVENTS, "actor_party_id", TableName.PARTIES, "party_id"),
     (TableName.EXPECTED_OUTCOMES, "shipment_id", TableName.SHIPMENTS, "shipment_id"),
+    (TableName.DEVICE_TRUTH, "device_id", TableName.DEVICES, "device_id"),
     (TableName.ANOMALIES, "shipment_id", TableName.SHIPMENTS, "shipment_id"),
 )
 """Every single-column foreign key: (child table, child column, parent table, parent column).
@@ -950,6 +953,14 @@ SCHEMAS: dict[TableName, pa.DataFrameSchema] = {
             _rule("excursion_counts_and_total_consistent", _list_lengths_match),
             _rule("excursion_windows_ordered", _windows_ordered),
         ],
+    ),
+    TableName.DEVICE_TRUTH: _table(
+        TableName.DEVICE_TRUTH,
+        {
+            "device_id": _id("device"),
+            # |offset| <= the device's uncertainty_c (< 1.0); checked against devices by tests.
+            "systematic_offset_c": _float(-1.0, 1.0),
+        },
     ),
     TableName.ANOMALIES: _table(
         TableName.ANOMALIES,
