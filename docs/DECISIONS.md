@@ -1,0 +1,12 @@
+# Decisions Log
+
+Every project decision is recorded here: date, decision, reason.
+
+| # | Date | Decision | Reason |
+|---|------|----------|--------|
+| 1 | 2026-11-19 | **Device vs Logger split.** *Device* (`DEV-000001`) is a physical logger: 1,000 of them, reused across shipments, holding calibration data. *Logger* (`LOG-<shipment-id>-01`) is the assignment of one device to one shipment (one row per shipment, 1:1 with Shipment). A device may never have two assignments with overlapping time windows, except where an anomaly is deliberately injected. | The brief asks for 1,000 loggers but 5,000 shipments, and uses the shipment-scoped ID `LOG-<shipment-id>-01`. Splitting the physical device from its assignment resolves the contradiction and keeps both the brief's ID format and its volumes. |
+| 2 | 2026-11-19 | Build backend: **hatchling**, `src/` layout, package version kept in `src/coldchain/__init__.py` (`__version__`) and read dynamically by `pyproject.toml`. | One source of truth for the version (DRY); hatchling is the standard, light-weight PEP 517 backend. |
+| 3 | 2026-11-19 | RNG streams: a child `SeedSequence` is derived per stage from `SeedSequence(seed, spawn_key=(crc32(stage_name),))`, rather than relying on the order of `.spawn()` calls. | Using a stable hash of the stage name means adding, removing or reordering stages never changes another stage's random numbers. This is equivalent to `spawn()` (which also sets `spawn_key`) but keyed by name instead of call order. |
+| 4 | 2026-11-19 | Config validation: pydantic v2 models with `extra="forbid"`; scenario weights must sum to 1.0 (±1e-6); each injection rate is in [0, 1] and their sum is ≤ 1 (injections target disjoint shipments); `date_window.end > start`; `trip_duration_hours.max ≥ min`. Errors are re-raised as `ConfigError` with the file path and field location. | Fail fast with clear messages (principle 1: error handling). Forbidding unknown keys catches typos in YAML. |
+| 5 | 2026-11-19 | Removed the root copy `YottaFlex_Master_Prompt.md`; `docs/PROJECT_PLAN.md` is the official plan. | User instruction at Phase 0 approval; avoids two copies of the plan drifting apart. |
+| 6 | 2026-11-19 | **Phase 2 TODO:** the `generate` command must accept a `--config <path>` option (default `config/default.yaml`) so a custom config file can be passed. | User instruction at Phase 0 approval; `load_config(path)` already supports it. |

@@ -1,0 +1,17 @@
+"""Custom exceptions for the coldchain package.
+
+All package-specific errors derive from :class:`ColdchainError`, so callers (e.g. the CLI)
+can catch one base class and exit cleanly with a clear message.
+"""
+
+
+class ColdchainError(Exception):
+    """Base class for every coldchain error."""
+
+
+class ConfigError(ColdchainError):
+    """Raised when configuration is missing, unreadable or fails validation."""
+
+
+class IdFormatError(ColdchainError, ValueError):
+    """Raised when an ID cannot be built from the given parts (bad number, width or type)."""

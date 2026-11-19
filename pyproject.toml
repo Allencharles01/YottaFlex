@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coldchain"
+dynamic = ["version"]
+description = "YottaFlex: reproducible synthetic cold-chain data and compliance pipeline."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "pandera>=0.20",
+    "pyyaml>=6.0",
+    "pydantic>=2.6",
+    "duckdb>=1.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+dashboard = [
+    "streamlit>=1.35",
+    "plotly>=5.20",
+]
+
+[project.scripts]
+coldchain = "coldchain.cli:app"
+
+[tool.hatch.version]
+path = "src/coldchain/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coldchain"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "N", "SIM", "D", "PTH", "T20", "RUF"]
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --cov=coldchain --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["coldchain"]
+branch = true

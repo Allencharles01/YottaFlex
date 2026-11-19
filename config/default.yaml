@@ -1,0 +1,14 @@
+# YottaFlex pipeline configuration. Validated on load by coldchain.config.
+seed: 20261022
+scales:
+  starter: { shipments: 50,   devices: 20 }
+  full:    { shipments: 5000, devices: 1000 }
+reading_interval_min: 10
+date_window: { start: "2026-01-01", end: "2026-10-31" }
+trip_duration_hours: { min: 4, max: 72 }
+scenario_weights: { NORMAL: 0.80, MINOR_SPIKE_WITHIN_ALLOWANCE: 0.06, BOUNDARY: 0.03,
+                    EXCURSION_BREACH: 0.05, LONG_DWELL: 0.04, CALIBRATION_EXPIRED: 0.02 }
+injection_rates: { logger_not_assigned: 0.01, product_threshold_mismatch: 0.01,
+                   missing_data_silently_passed: 0.01, custody_gap_not_flagged: 0.01,
+                   excursion_across_unrelated_shipments: 0.01 }
+long_dwell_threshold_min: 120
