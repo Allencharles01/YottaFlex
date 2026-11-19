@@ -13,16 +13,17 @@ from typing import Annotated, TypeVar
 import typer
 
 from coldchain import __version__
+from coldchain.compliance import ENGINE_INPUTS, check_tables
 from coldchain.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_OUTPUT_DIR,
     load_config,
     load_reference,
 )
-from coldchain.enums import Scale
+from coldchain.enums import Layer, Scale
 from coldchain.errors import ColdchainError
 from coldchain.generate import generate_tables
-from coldchain.io import write_layers
+from coldchain.io import layer_dir, read_tables, write_layers
 from coldchain.schemas import TABLE_LAYERS
 
 app = typer.Typer(
@@ -85,8 +86,8 @@ def generate(
 ) -> None:
     """Generate master data, events and natural scenarios, plus the ground truth.
 
-    Raw tables go to ``<output-dir>/<scale>/raw/``; ``expected_outcomes`` and
-    ``device_truth`` go to ``<output-dir>/<scale>/ground_truth/``.
+    Raw tables go to ``<output-dir>/<scale>/raw/``; the answer-key tables go to
+    ``<output-dir>/<scale>/ground_truth/``.
     """
 
     def body() -> None:
@@ -103,5 +104,42 @@ def generate(
         for layer, target in written.items():
             count = sum(TABLE_LAYERS[name] is layer for name in tables)
             logger.info("Wrote %d %s tables (Parquet + CSV) to %s", count, layer.value, target)
+
+    _run(body)
+
+
+@app.command()
+def check(
+    scale: Annotated[Scale, typer.Option("--scale", help="Scale preset to check.")] = (
+        Scale.STARTER
+    ),
+    config_path: Annotated[
+        Path, typer.Option("--config", help="Path to the pipeline config YAML.")
+    ] = DEFAULT_CONFIG_PATH,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Output root holding <root>/<scale>/raw/."),
+    ] = DEFAULT_OUTPUT_DIR,
+) -> None:
+    """Run the compliance engine on the raw tables.
+
+    Reads only ``<output-dir>/<scale>/raw/`` (never the ground truth) and writes the excursion
+    reports, their reading links, the decisions and the appended status events to
+    ``<output-dir>/<scale>/compliance/``. Raw files are never modified.
+    """
+
+    def body() -> None:
+        config = load_config(config_path)
+        raw_dir = layer_dir(output_dir, scale.value, Layer.RAW)
+        logger.info("Checking scale=%s from %s", scale.value, raw_dir)
+        tables = check_tables(config, read_tables(ENGINE_INPUTS, raw_dir))
+        written = write_layers(tables, output_dir, scale.value)
+        for name, frame in tables.items():
+            logger.info("  %-13s %-26s %8d rows", TABLE_LAYERS[name].value, name.value, len(frame))
+        logger.info(
+            "Wrote %d compliance tables (Parquet + CSV) to %s",
+            len(tables),
+            written[Layer.COMPLIANCE],
+        )
 
     _run(body)

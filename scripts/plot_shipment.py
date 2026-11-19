@@ -5,8 +5,14 @@ departure for its products (compliance_rules.md §1.1). Saves
 ``<output-dir>/<scale>/plots/<shipment_id>.png`` with the readings line, the allowed
 ``min_c``-``max_c`` band (green), dashed absolute limits and every excursion window (red).
 
+With ``--engine`` it also overlays the compliance engine's ``excursion_reports`` (read from
+``compliance/``, written by ``coldchain check``) as hatched outlines labelled with report ID,
+duration and breach type, and puts the engine's status and reason codes in the title, so the
+plot's own windows and the engine's reports can be compared by eye.
+
 Usage:
     python scripts/plot_shipment.py SHP-2026-000018 [--scale starter] [--output-dir output]
+                                    [--engine]
 """
 
 import argparse
@@ -22,8 +28,9 @@ import pandas as pd
 
 from coldchain.config import load_config
 from coldchain.enums import Layer, TableName
+from coldchain.errors import TableIOError
 from coldchain.generate.expected import applied_policies
-from coldchain.io import layer_dir, read_tables
+from coldchain.io import layer_dir, read_table, read_tables
 
 logger = logging.getLogger("plot_shipment")
 
@@ -31,6 +38,7 @@ BAND_COLOR = "#2e9e5b"
 LINE_COLOR = "#1f4e79"
 EXCURSION_COLOR = "#d64545"
 LIMIT_COLOR = "#555555"
+ENGINE_COLOR = "#7a1f9e"
 
 TABLES = (
     TableName.SHIPMENTS,
@@ -69,7 +77,79 @@ def excursion_windows(
     return windows[["start", "end", "duration_min"]]
 
 
-def plot_shipment(shipment_id: str, raw_dir: Path, out_path: Path, interval_min: int) -> Path:
+def engine_results(shipment_id: str, compliance_dir: Path) -> tuple[pd.DataFrame, pd.Series]:
+    """Read the engine's excursion reports and decision for one shipment.
+
+    Args:
+        shipment_id: The shipment.
+        compliance_dir: The ``compliance/`` layer directory (written by ``coldchain check``).
+
+    Returns:
+        ``(reports, decision)``: the shipment's excursion reports sorted by start, and its
+        ``compliance_decisions`` row.
+
+    Raises:
+        SystemExit: If the compliance tables are missing or have no decision for the shipment.
+    """
+    try:
+        reports = read_table(TableName.EXCURSION_REPORTS, compliance_dir)
+        decisions = read_table(TableName.COMPLIANCE_DECISIONS, compliance_dir)
+    except TableIOError as exc:
+        raise SystemExit(f"{exc} (run `coldchain check` first)") from exc
+    decision = decisions[decisions["shipment_id"] == shipment_id]
+    if decision.empty:
+        raise SystemExit(f"No compliance decision for {shipment_id}")
+    reports = reports[reports["shipment_id"] == shipment_id].sort_values("started_at")
+    return reports, decision.iloc[0]
+
+
+def _overlay_engine(ax: plt.Axes, reports: pd.DataFrame, interval_min: int) -> None:
+    """Draw every engine excursion report as a hatched outline tagged with its number.
+
+    The full report details (ID, duration, breach type) are listed beside the legend.
+    """
+    step = pd.Timedelta(minutes=interval_min)
+    lines = []
+    for i, r in enumerate(reports.itertuples()):
+        tag = f"R{int(r.report_id.rsplit('-', 1)[1])}"
+        ax.axvspan(
+            r.started_at,
+            r.ended_at + step,
+            facecolor="none",
+            edgecolor=ENGINE_COLOR,
+            hatch="///",
+            lw=1.2,
+            label="Engine excursion report" if i == 0 else None,
+        )
+        ax.annotate(
+            tag,
+            xy=(r.started_at, 0),
+            xycoords=("data", "axes fraction"),
+            xytext=(1, 3 + 10 * (i % 2)),
+            textcoords="offset points",
+            fontsize=7,
+            color=ENGINE_COLOR,
+        )
+        lines.append(f"{tag}  {r.report_id}  {r.duration_min} min  {r.breach_type}")
+    ax.text(
+        1.01,
+        0.55,
+        "Engine reports\n" + ("\n".join(lines) if lines else "(none)"),
+        transform=ax.transAxes,
+        va="top",
+        fontsize=7.5,
+        color=ENGINE_COLOR,
+        family="monospace",
+    )
+
+
+def plot_shipment(
+    shipment_id: str,
+    raw_dir: Path,
+    out_path: Path,
+    interval_min: int,
+    compliance_dir: Path | None = None,
+) -> Path:
     """Draw and save the temperature plot of one shipment.
 
     Args:
@@ -77,6 +157,8 @@ def plot_shipment(shipment_id: str, raw_dir: Path, out_path: Path, interval_min:
         raw_dir: The ``raw/`` layer directory.
         out_path: Where to save the PNG.
         interval_min: Reading interval in minutes.
+        compliance_dir: If given, overlay the engine's excursion reports from this
+            ``compliance/`` directory and show its decision in the title.
 
     Returns:
         The saved file path.
@@ -140,7 +222,13 @@ def plot_shipment(shipment_id: str, raw_dir: Path, out_path: Path, interval_min:
         lw=1.5,
         label="Readings",
     )
-    ax.set_title(f"{shipment_id} — applied {policy['applied_policy_id']}", loc="left")
+    title = f"{shipment_id} — applied {policy['applied_policy_id']}"
+    if compliance_dir is not None:
+        reports, decision = engine_results(shipment_id, compliance_dir)
+        _overlay_engine(ax, reports, interval_min)
+        reasons = decision["reason_codes"] if pd.notna(decision["reason_codes"]) else "no reasons"
+        title += f"\nengine: {decision['status']} ({reasons})"
+    ax.set_title(title, loc="left", fontsize=10)
     ax.set_ylabel("Temperature (°C)")
     ax.set_xlabel("Recorded at (UTC)")
     ax.grid(axis="y", color="#e0e0e0", lw=0.8)
@@ -165,12 +253,20 @@ def main() -> None:
     parser.add_argument("--scale", default="starter")
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument("--config", type=Path, default=None, help="Config YAML (optional).")
+    parser.add_argument(
+        "--engine",
+        action="store_true",
+        help="Overlay the compliance engine's excursion reports (run `coldchain check` first).",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     config = load_config(args.config) if args.config else load_config()
     raw_dir = layer_dir(args.output_dir, args.scale, Layer.RAW)
     out_path = args.output_dir / args.scale / "plots" / f"{args.shipment_id}.png"
-    plot_shipment(args.shipment_id, raw_dir, out_path, config.reading_interval_min)
+    compliance_dir = (
+        layer_dir(args.output_dir, args.scale, Layer.COMPLIANCE) if args.engine else None
+    )
+    plot_shipment(args.shipment_id, raw_dir, out_path, config.reading_interval_min, compliance_dir)
 
 
 if __name__ == "__main__":

@@ -284,7 +284,7 @@ Bridge table and traceability link from a report to its readings (raw readings a
 | `status` | string | yes | COMPLIANT, COMPLIANT_WITH_WARNINGS, INCONCLUSIVE, NON_COMPLIANT | — | no | S: = the most severe status triggered by `reason_codes`. |
 | `reason_codes` | string | no | `\|`-list of reason codes; null = none | — | no | S: known codes, distinct, canonical order. |
 | `reading_count` | integer | yes | ≥ 0 | readings | no | S: ≤ `expected_reading_count`. V: = trusted in-window readings. |
-| `expected_reading_count` | integer | yes | ≥ 1 | readings | no | V: = window / `reading_interval_min` + 1. |
+| `expected_reading_count` | integer | yes | ≥ 1 | readings | no | V: = ⌊window / `reading_interval_min`⌋ + 1 (window = logger assignment, or actual departure → arrival without a logger). |
 | `coverage_pct` | float | yes | [0, 100], 2 dp | % | no | S: = round(100 × `reading_count` / `expected_reading_count`, 2). |
 | `max_gap_min` | integer | yes | ≥ 0 | min | no | V: recomputed from the readings (window edges included). |
 | `total_excursion_min` | integer | yes | ≥ 0 | min | no | S: 0 exactly when `excursion_report_ids` is null. V: = Σ linked `duration_min`. |
@@ -304,8 +304,8 @@ history is never overwritten). Same columns as `shipment_status_events`.
 | `shipment_id` | string | yes | `SHP-2026-000001` | — | with `sequence` | V: FK → `shipments`. |
 | `sequence` | integer | yes | 1–99 | — | with `shipment_id` | V: continues the raw history's numbering (last raw + 1, …). |
 | `status` | string | yes | UNDER_REVIEW, RELEASED, QUARANTINED | — | no | S: engine statuses only. V: UNDER_REVIEW first, then at most one RELEASED or QUARANTINED. |
-| `event_at` | timestamp | yes | UTC | — | no | V: = logger `unassigned_at` (derived, never wall-clock); ≥ DELIVERED `event_at`. |
-| `actor_party_id` | string | yes | `PTY-0001` | — | no | V: FK → `parties`; UNDER_REVIEW → a LOGISTICS_ANALYST, RELEASED/QUARANTINED → an OPERATIONS_MANAGER. |
+| `event_at` | timestamp | yes | UTC | — | no | V: = logger `unassigned_at`, or `actual_arrival_at` without a logger (derived, never wall-clock); ≥ DELIVERED `event_at`. |
+| `actor_party_id` | string | yes | `PTY-0001` | — | no | V: FK → `parties`; UNDER_REVIEW → a LOGISTICS_ANALYST, RELEASED/QUARANTINED → an OPERATIONS_MANAGER, assigned round-robin in `shipment_id` order (DECISIONS.md #61). |
 
 ---
 

@@ -27,3 +27,11 @@ class GenerationError(ColdchainError):
 
 class TableIOError(ColdchainError):
     """Raised when a table file is missing, unreadable or has the wrong columns."""
+
+
+class ComplianceError(ColdchainError):
+    """Raised when the compliance engine meets a broken invariant it must not guess around.
+
+    Examples: a shipment that mixes policy codes, has no lots, has no policy version effective
+    at departure, or whose logger references an unknown device.
+    """

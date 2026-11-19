@@ -40,22 +40,27 @@ A reading counts for the shipment when **all** of these hold:
 - its `device_id` is the device in that logger assignment;
 - its `recorded_at` lies inside *W* (both ends inclusive).
 
-Readings whose `device_id` differs from the assignment are **untrusted**. They add
-**LOGGER_NOT_ASSIGNED** and are excluded from every gap, coverage and excursion calculation,
-because they cannot be attributed to the assigned, calibrated device (DECISIONS.md #10). Readings
-outside *W* are ignored.
+Readings on the shipment's logger inside *W* whose `device_id` differs from the assignment are
+**untrusted**. They add **LOGGER_NOT_ASSIGNED** and are excluded from every gap, coverage,
+excursion and uncertainty calculation, because they cannot be attributed to the assigned,
+calibrated device (DECISIONS.md #10). Readings outside *W* are ignored for every rule, the device
+check included: a wrong-device reading outside *W* adds nothing (DECISIONS.md #60).
 
 If the shipment has **no logger assignment**, the engine adds LOGGER_NOT_ASSIGNED, uses
 `[actual_departure_at, actual_arrival_at]` as *W*, and treats the shipment as having zero trusted
-readings.
+readings. Without a device, *i* is the config `reading_interval_min`, and CALIBRATION_EXPIRED and
+NEAR_LIMIT_UNCERTAIN are not evaluated (DECISIONS.md #59).
 
 ### 1.3 Coverage
 
 ```
-expected_reading_count = (unassigned_at − assigned_at) / i + 1
+expected_reading_count = floor((window_end − window_start) / i) + 1
 reading_count          = number of trusted readings
 coverage_pct           = round(100 × reading_count / expected_reading_count, 2)
 ```
+
+A logger window lies on the reading grid, so the division is exact. The no-logger fallback
+window usually does not, so the count is floored (DECISIONS.md #59).
 
 **LOW_COVERAGE** if `coverage_pct < min_coverage_pct` (strict: exactly 95.00 % passes).
 
@@ -196,6 +201,10 @@ raw history. The sequence numbers continue after the last raw event.
 | RELEASE | UNDER_REVIEW, then RELEASED | logistics analyst, then operations manager |
 | QUARANTINE | UNDER_REVIEW, then QUARANTINED | logistics analyst, then operations manager |
 | REVIEW | UNDER_REVIEW only (waits for a human) | logistics analyst |
+
+**Actors** are assigned round-robin: the *k*-th shipment in `shipment_id` order (0-based) gets
+the analyst at position *k* mod *n* among the LOGISTICS_ANALYST parties sorted by `party_id`, and
+the operations manager chosen the same way (DECISIONS.md #61). No randomness is involved.
 
 `event_at` is the logger's `unassigned_at` (or `actual_arrival_at` when there is no logger). It
 is derived from the data and never taken from the wall clock.

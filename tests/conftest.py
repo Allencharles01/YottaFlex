@@ -343,3 +343,114 @@ def starter_tables(app_config, reference) -> dict[TableName, pd.DataFrame]:
     from coldchain.generate import generate_tables
 
     return generate_tables(app_config, reference, "starter")
+
+
+# --------------------------------------------------------------------------------------------
+# Compliance-engine unit fixtures (Phase 4): the valid one-shipment sample with a complete
+# reading stream across its logger window (07:30-12:30, 31 readings at 5.0 °C).
+# --------------------------------------------------------------------------------------------
+
+WINDOW_TIMES = pd.date_range("2026-03-10 07:30", "2026-03-10 12:30", freq="10min", tz="UTC")
+
+
+def readings_frame(
+    logger: str, device: str, times: pd.DatetimeIndex, temperature: float = 5.0
+) -> pd.DataFrame:
+    """A temperature-readings frame for one logger at the given times (constant temperature)."""
+    from coldchain import ids
+
+    recorded = pd.Series(times).astype(TIMESTAMP_DTYPE)
+    return pd.DataFrame(
+        {
+            "reading_id": ids.reading_ids(pd.Series([logger] * len(times)), recorded),
+            "logger_id": pd.Series([logger] * len(times), dtype="str"),
+            "device_id": pd.Series([device] * len(times), dtype="str"),
+            "recorded_at": recorded,
+            "temperature_c": float(temperature),
+        }
+    )
+
+
+def build_raw_one_shipment() -> dict[TableName, pd.DataFrame]:
+    """The raw layer of the valid sample, with a complete 10-minute stream at 5.0 °C."""
+    from coldchain.enums import Layer
+    from coldchain.schemas import TABLE_LAYERS
+
+    tables = {
+        name: frame
+        for name, frame in build_valid_tables().items()
+        if TABLE_LAYERS[name] is Layer.RAW
+    }
+    tables[TableName.TEMPERATURE_READINGS] = readings_frame(LOG, "DEV-000001", WINDOW_TIMES)
+    return tables
+
+
+def set_temperatures(raw: dict[TableName, pd.DataFrame], values: dict[str, float]) -> None:
+    """Set the temperature of the sample's readings at the given ``HHMM`` times (in place)."""
+    readings = raw[TableName.TEMPERATURE_READINGS]
+    stamps = readings["recorded_at"].dt.strftime("%H%M")
+    for hhmm, value in values.items():
+        assert (stamps == hhmm).sum() == 1, hhmm
+        readings.loc[stamps == hhmm, "temperature_c"] = value
+
+
+def drop_readings(raw: dict[TableName, pd.DataFrame], *hhmm: str) -> None:
+    """Remove the sample's readings at the given ``HHMM`` times (in place)."""
+    readings = raw[TableName.TEMPERATURE_READINGS]
+    keep = ~readings["recorded_at"].dt.strftime("%H%M").isin(hhmm)
+    raw[TableName.TEMPERATURE_READINGS] = readings[keep].reset_index(drop=True)
+
+
+@pytest.fixture
+def raw_one() -> dict[TableName, pd.DataFrame]:
+    """A fresh, compliant one-shipment raw layer (see :func:`build_raw_one_shipment`)."""
+    return build_raw_one_shipment()
+
+
+SHP2 = "SHP-2026-000002"
+LOG2 = "LOG-SHP-2026-000002-01"
+
+
+def add_back_to_back_shipment(
+    raw: dict[TableName, pd.DataFrame], shift_min: int = 310, device: str = "DEV-000001"
+) -> None:
+    """Clone the sample shipment as ``SHP2``, ``shift_min`` later, on ``device`` (in place).
+
+    With the default shift the second logger window (12:40-17:40) starts one reading interval
+    after the first one ends (12:30), on the same physical device.
+    """
+    shift = pd.Timedelta(minutes=shift_min)
+    for name in (
+        TableName.SHIPMENTS,
+        TableName.SHIPMENT_LOTS,
+        TableName.LOGGERS,
+        TableName.ROUTE_STOPS,
+        TableName.CUSTODY_EVENTS,
+        TableName.SHIPMENT_STATUS_EVENTS,
+    ):
+        frame = raw[name]
+        clone = frame.copy()
+        for column in clone.columns:
+            if pd.api.types.is_datetime64_any_dtype(clone[column]):
+                clone[column] = clone[column] + shift
+            elif clone[column].dtype == "str" or clone[column].dtype == object:
+                clone[column] = clone[column].str.replace(SHP, SHP2, regex=False)
+        if name is TableName.LOGGERS:
+            clone["device_id"] = device
+        raw[name] = pd.concat([frame, clone], ignore_index=True)
+    raw[TableName.TEMPERATURE_READINGS] = pd.concat(
+        [raw[TableName.TEMPERATURE_READINGS], readings_frame(LOG2, device, WINDOW_TIMES + shift)],
+        ignore_index=True,
+    )
+
+
+def set_temperatures_of(
+    raw: dict[TableName, pd.DataFrame], logger: str, values: dict[str, float]
+) -> None:
+    """Like :func:`set_temperatures`, for the readings of one ``logger``."""
+    readings = raw[TableName.TEMPERATURE_READINGS]
+    stamps = readings["recorded_at"].dt.strftime("%H%M")
+    for hhmm, value in values.items():
+        hit = (stamps == hhmm) & (readings["logger_id"] == logger)
+        assert hit.sum() == 1, (logger, hhmm)
+        readings.loc[hit, "temperature_c"] = value

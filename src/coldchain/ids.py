@@ -252,6 +252,22 @@ def status_event_ids(shipments: pd.Series, sequences: pd.Series) -> pd.Series:
     return _scoped_ids("STE", shipments, sequences)
 
 
+def excursion_report_ids(numbers: pd.Series, year: int = DEFAULT_ID_YEAR) -> pd.Series:
+    """Vectorised :func:`excursion_report_id` for a column of 1-based report numbers.
+
+    Args:
+        numbers: Integer column of report numbers (each within 1..999999).
+        year: ID-series year.
+
+    Returns:
+        Series of report IDs (e.g. ``EXCR-2026-000057``) with the same index as ``numbers``.
+
+    Raises:
+        IdFormatError: If a number is missing, not an integer or out of range.
+    """
+    return f"EXCR-{_year(year)}-" + _padded_column(numbers, 6)
+
+
 def embedded_shipment_ids(child_ids: pd.Series) -> pd.Series:
     """Extract the shipment ID embedded in shipment-scoped IDs.
 

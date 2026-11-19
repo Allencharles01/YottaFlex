@@ -194,3 +194,13 @@ def test_embedded_shipment_ids() -> None:
         "SHP-2026-000005",
     ]
     assert pd.isna(result.iloc[5])
+
+
+def test_vectorised_excursion_report_ids_match_scalar() -> None:
+    numbers = pd.Series([1, 57, 999_999], index=[5, 6, 7])
+    built = ids.excursion_report_ids(numbers)
+    assert list(built.index) == [5, 6, 7]
+    assert list(built) == [ids.excursion_report_id(n) for n in numbers]
+    assert ids.excursion_report_ids(pd.Series([], dtype="int64")).empty
+    with pytest.raises(IdFormatError):
+        ids.excursion_report_ids(pd.Series([0]))

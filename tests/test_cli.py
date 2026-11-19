@@ -104,3 +104,14 @@ def test_missing_config_exits_non_zero(tmp_path: Path) -> None:
 def test_invalid_scale_and_negative_seed_rejected(tmp_path: Path) -> None:
     assert runner.invoke(app, ["generate", "--scale", "huge"]).exit_code != 0
     assert _generate(tmp_path, "--seed", "-1").exit_code != 0
+
+
+def test_no_args_help_lists_check() -> None:
+    assert "check" in runner.invoke(app, []).output
+
+
+def test_check_without_raw_data_exits_with_status_1(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["check", "--scale", "starter", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Table file not found" in result.output
+    assert not (tmp_path / "starter" / "compliance").exists()

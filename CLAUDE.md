@@ -10,6 +10,8 @@ Single source of truth: `docs/PROJECT_PLAN.md`. Decisions: `docs/DECISIONS.md`.
   commands; print Phase Summary, UAT steps, proposed commit message, and the Phase Status Report
   (template in PROJECT_PLAN.md §0.1) as the last thing, in one code block. Then STOP and wait for
   `Phase N approved` before committing.
+- Always run the full `ruff check .`, `ruff format --check .` and `pytest` immediately before
+  every git commit, even if the last change was docs-only. Never commit with a failing test.
 - Ambiguity or contradiction → ask, don't guess. Log every decision in `docs/DECISIONS.md`.
 - Develop on `starter` scale; `full` only when the phase says so.
 - Never hand-edit generated output.
