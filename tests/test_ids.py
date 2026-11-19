@@ -130,3 +130,67 @@ def test_vectorised_reading_ids_errors() -> None:
 def test_vectorised_reading_ids_empty() -> None:
     empty_times = pd.Series(pd.DatetimeIndex([], tz="UTC"))
     assert ids.reading_ids(pd.Series([], dtype=str), empty_times).empty
+
+
+# ---------------------------------------------------------------- vectorised scoped IDs
+
+
+@pytest.mark.parametrize(
+    ("vectorised", "scalar"),
+    [
+        (ids.route_stop_ids, ids.route_stop_id),
+        (ids.custody_event_ids, ids.custody_event_id),
+        (ids.status_event_ids, ids.status_event_id),
+    ],
+)
+def test_vectorised_scoped_ids_match_scalar(vectorised, scalar) -> None:
+    shipments = pd.Series([SHP1, SHP1, "SHP-2026-004999"])
+    sequences = pd.Series([1, 2, 99])
+    expected = [scalar(s, n) for s, n in zip(shipments, sequences, strict=True)]
+    assert vectorised(shipments, sequences).tolist() == expected
+
+
+def test_vectorised_logger_ids_match_scalar() -> None:
+    shipments = pd.Series([SHP1, "SHP-2026-000002"])
+    assert ids.logger_ids(shipments).tolist() == [ids.logger_id(s) for s in shipments]
+    assert ids.logger_ids(shipments, number=2).tolist()[0] == "LOG-SHP-2026-000001-02"
+
+
+@pytest.mark.parametrize("sequences", [[0], [100], [1.5]])
+def test_vectorised_scoped_ids_reject_bad_sequences(sequences) -> None:
+    with pytest.raises(IdFormatError):
+        ids.route_stop_ids(pd.Series([SHP1]), pd.Series(sequences))
+
+
+def test_vectorised_scoped_ids_reject_nulls_and_length_mismatch() -> None:
+    with pytest.raises(IdFormatError):
+        ids.route_stop_ids(pd.Series([SHP1]), pd.Series([1, None], dtype="Int64"))
+    with pytest.raises(IdFormatError, match="Length mismatch"):
+        ids.route_stop_ids(pd.Series([SHP1]), pd.Series([1, 2]))
+
+
+def test_vectorised_scoped_ids_handle_empty_input() -> None:
+    empty = ids.custody_event_ids(pd.Series([], dtype=str), pd.Series([], dtype="int64"))
+    assert empty.empty
+
+
+def test_embedded_shipment_ids() -> None:
+    values = pd.Series(
+        [
+            LOG1,
+            "TEMP-LOG-SHP-2026-000007-01-20260310T0910",
+            "RST-SHP-2026-000003-02",
+            "CUS-SHP-2026-000004-03",
+            "STE-SHP-2026-000005-04",
+            "DEV-000001",
+        ]
+    )
+    result = ids.embedded_shipment_ids(values)
+    assert result.tolist()[:5] == [
+        SHP1,
+        "SHP-2026-000007",
+        "SHP-2026-000003",
+        "SHP-2026-000004",
+        "SHP-2026-000005",
+    ]
+    assert pd.isna(result.iloc[5])

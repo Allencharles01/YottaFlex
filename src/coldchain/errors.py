@@ -15,3 +15,7 @@ class ConfigError(ColdchainError):
 
 class IdFormatError(ColdchainError, ValueError):
     """Raised when an ID cannot be built from the given parts (bad number, width or type)."""
+
+
+class SchemaValidationError(ColdchainError):
+    """Raised when a table fails its pandera schema (see :mod:`coldchain.schemas`)."""

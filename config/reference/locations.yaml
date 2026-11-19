@@ -1,0 +1,24 @@
+# Indian cities used for parties and routes. Validated on load by coldchain.config.
+# Coordinates are approximate city centres (decimal degrees, 2 dp) from general geographic
+# knowledge; no external dataset is used. is_hub: hosts warehouses / cross-docks.
+# is_manufacturing_cluster: hosts pharma suppliers. Every city can host receivers.
+locations:
+  - { city: Mumbai,        state: Maharashtra,      latitude: 19.08, longitude: 72.88, is_hub: true,  is_manufacturing_cluster: true }
+  - { city: Pune,          state: Maharashtra,      latitude: 18.52, longitude: 73.86, is_hub: false, is_manufacturing_cluster: true }
+  - { city: Nagpur,        state: Maharashtra,      latitude: 21.15, longitude: 79.09, is_hub: true,  is_manufacturing_cluster: false }
+  - { city: Ahmedabad,     state: Gujarat,          latitude: 23.02, longitude: 72.57, is_hub: true,  is_manufacturing_cluster: true }
+  - { city: Vadodara,      state: Gujarat,          latitude: 22.31, longitude: 73.18, is_hub: false, is_manufacturing_cluster: true }
+  - { city: Hyderabad,     state: Telangana,        latitude: 17.39, longitude: 78.49, is_hub: true,  is_manufacturing_cluster: true }
+  - { city: Bengaluru,     state: Karnataka,        latitude: 12.97, longitude: 77.59, is_hub: true,  is_manufacturing_cluster: true }
+  - { city: Chennai,       state: Tamil Nadu,       latitude: 13.08, longitude: 80.27, is_hub: true,  is_manufacturing_cluster: false }
+  - { city: Kochi,         state: Kerala,           latitude: 9.93,  longitude: 76.27, is_hub: false, is_manufacturing_cluster: false }
+  - { city: Delhi,         state: Delhi,            latitude: 28.61, longitude: 77.21, is_hub: true,  is_manufacturing_cluster: false }
+  - { city: Baddi,         state: Himachal Pradesh, latitude: 30.96, longitude: 76.79, is_hub: false, is_manufacturing_cluster: true }
+  - { city: Chandigarh,    state: Chandigarh,       latitude: 30.73, longitude: 76.78, is_hub: false, is_manufacturing_cluster: false }
+  - { city: Jaipur,        state: Rajasthan,        latitude: 26.91, longitude: 75.79, is_hub: false, is_manufacturing_cluster: false }
+  - { city: Lucknow,       state: Uttar Pradesh,    latitude: 26.85, longitude: 80.95, is_hub: true,  is_manufacturing_cluster: false }
+  - { city: Indore,        state: Madhya Pradesh,   latitude: 22.72, longitude: 75.86, is_hub: false, is_manufacturing_cluster: false }
+  - { city: Kolkata,       state: West Bengal,      latitude: 22.57, longitude: 88.36, is_hub: true,  is_manufacturing_cluster: false }
+  - { city: Bhubaneswar,   state: Odisha,           latitude: 20.30, longitude: 85.82, is_hub: false, is_manufacturing_cluster: false }
+  - { city: Visakhapatnam, state: Andhra Pradesh,   latitude: 17.69, longitude: 83.22, is_hub: false, is_manufacturing_cluster: true }
+  - { city: Guwahati,      state: Assam,            latitude: 26.14, longitude: 91.74, is_hub: true,  is_manufacturing_cluster: false }

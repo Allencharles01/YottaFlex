@@ -1,0 +1,21 @@
+# Product catalogue templates (generic, non-branded names). Validated on load by coldchain.config.
+# shelf_life_days drives lot expiry (expires_on = manufactured_on + shelf_life_days);
+# lot_size_units bounds the quantity of each generated lot.
+products:
+  - { name: "Influenza Vaccine (Quadrivalent)",  category: VACCINE,        policy_code: REFRIG_2_8,    shelf_life_days: 365, lot_size_units: { min: 2000, max: 10000 } }
+  - { name: "Hepatitis B Vaccine",               category: VACCINE,        policy_code: REFRIG_2_8,    shelf_life_days: 730, lot_size_units: { min: 2000, max: 8000 } }
+  - { name: "Measles-Rubella Vaccine",           category: VACCINE,        policy_code: REFRIG_2_8,    shelf_life_days: 540, lot_size_units: { min: 1500, max: 6000 } }
+  - { name: "mRNA Respiratory Vaccine",          category: VACCINE,        policy_code: FROZEN,        shelf_life_days: 270, lot_size_units: { min: 1000, max: 5000 } }
+  - { name: "Oral Polio Vaccine",                category: VACCINE,        policy_code: FROZEN,        shelf_life_days: 730, lot_size_units: { min: 3000, max: 12000 } }
+  - { name: "Insulin Glargine Pens",             category: BIOLOGIC,       policy_code: REFRIG_2_8,    shelf_life_days: 900, lot_size_units: { min: 1000, max: 6000 } }
+  - { name: "Monoclonal Antibody Infusion",      category: BIOLOGIC,       policy_code: REFRIG_2_8,    shelf_life_days: 730, lot_size_units: { min: 200,  max: 1500 } }
+  - { name: "Erythropoietin Injection",          category: BIOLOGIC,       policy_code: REFRIG_2_8,    shelf_life_days: 540, lot_size_units: { min: 500,  max: 3000 } }
+  - { name: "Recombinant Growth Hormone",        category: BIOLOGIC,       policy_code: COOL_8_15,     shelf_life_days: 365, lot_size_units: { min: 300,  max: 2000 } }
+  - { name: "Fresh Frozen Plasma Units",         category: FROZEN,         policy_code: FROZEN,        shelf_life_days: 365, lot_size_units: { min: 100,  max: 800 } }
+  - { name: "Cell Culture Media",                category: FROZEN,         policy_code: FROZEN,        shelf_life_days: 540, lot_size_units: { min: 200,  max: 1200 } }
+  - { name: "Antibiotic Oral Suspension",        category: MEDICINE,       policy_code: COOL_8_15,     shelf_life_days: 540, lot_size_units: { min: 2000, max: 10000 } }
+  - { name: "Ophthalmic Eye Drops",              category: MEDICINE,       policy_code: COOL_8_15,     shelf_life_days: 730, lot_size_units: { min: 3000, max: 15000 } }
+  - { name: "Probiotic Capsules",                category: MEDICINE,       policy_code: COOL_8_15,     shelf_life_days: 365, lot_size_units: { min: 5000, max: 20000 } }
+  - { name: "Paracetamol Tablets 500 mg",        category: AMBIENT_PHARMA, policy_code: AMBIENT_15_25, shelf_life_days: 1095, lot_size_units: { min: 10000, max: 50000 } }
+  - { name: "Antiretroviral Fixed-Dose Tablets", category: AMBIENT_PHARMA, policy_code: AMBIENT_15_25, shelf_life_days: 730, lot_size_units: { min: 5000, max: 30000 } }
+  - { name: "Oral Rehydration Salts",            category: AMBIENT_PHARMA, policy_code: AMBIENT_15_25, shelf_life_days: 1095, lot_size_units: { min: 10000, max: 60000 } }

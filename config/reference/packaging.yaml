@@ -1,0 +1,13 @@
+# Packaging profiles. Validated on load by coldchain.config.
+# setpoint_c must lie inside the band of every version of supported_policy_code.
+# thermal_response (0-1): how fast the inside temperature follows the ambient temperature
+# (0 = perfectly insulated, 1 = no insulation).
+packaging:
+  - { name: "Active Reefer 2-8 C",        packaging_type: ACTIVE_REEFER, supported_policy_code: REFRIG_2_8,    setpoint_c: 5.0,   max_hold_hours: 240.0, thermal_response: 0.05 }
+  - { name: "Passive Gel Shipper 2-8 C",  packaging_type: PASSIVE_GEL,   supported_policy_code: REFRIG_2_8,    setpoint_c: 5.0,   max_hold_hours: 96.0,  thermal_response: 0.25 }
+  - { name: "Active Reefer 8-15 C",       packaging_type: ACTIVE_REEFER, supported_policy_code: COOL_8_15,     setpoint_c: 11.5,  max_hold_hours: 240.0, thermal_response: 0.05 }
+  - { name: "Passive Gel Shipper 8-15 C", packaging_type: PASSIVE_GEL,   supported_policy_code: COOL_8_15,     setpoint_c: 11.5,  max_hold_hours: 96.0,  thermal_response: 0.25 }
+  - { name: "Active Reefer Frozen",       packaging_type: ACTIVE_REEFER, supported_policy_code: FROZEN,        setpoint_c: -21.0, max_hold_hours: 240.0, thermal_response: 0.05 }
+  - { name: "Dry Ice Shipper",            packaging_type: DRY_ICE,       supported_policy_code: FROZEN,        setpoint_c: -21.0, max_hold_hours: 96.0,  thermal_response: 0.15 }
+  - { name: "Active Reefer 15-25 C",      packaging_type: ACTIVE_REEFER, supported_policy_code: AMBIENT_15_25, setpoint_c: 20.0,  max_hold_hours: 240.0, thermal_response: 0.10 }
+  - { name: "Insulated Box 15-25 C",      packaging_type: INSULATED_BOX, supported_policy_code: AMBIENT_15_25, setpoint_c: 20.0,  max_hold_hours: 120.0, thermal_response: 0.50 }

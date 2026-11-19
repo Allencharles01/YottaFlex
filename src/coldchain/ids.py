@@ -199,3 +199,68 @@ def reading_ids(loggers: pd.Series, recorded_at: pd.Series) -> pd.Series:
         raise IdFormatError("recorded_at must be timezone-aware (UTC)")
     stamps = times.dt.tz_convert("UTC").dt.strftime(READING_TS_FORMAT)
     return "TEMP-" + loggers.astype(str) + "-" + stamps.to_numpy()
+
+
+def _check_lengths(left: pd.Series, right: pd.Series) -> None:
+    """Fail if two aligned columns differ in length."""
+    if len(left) != len(right):
+        raise IdFormatError(f"Length mismatch: {len(left)} vs {len(right)} values")
+
+
+def _padded_column(numbers: pd.Series, width: int) -> pd.Series:
+    """Vectorised :func:`_padded`: zero-pad a column of positive ints."""
+    values = pd.Series(numbers)
+    if not pd.api.types.is_integer_dtype(values) or values.isna().any():
+        raise IdFormatError(f"ID numbers must be a non-null integer column, got {values.dtype}")
+    if len(values) and (values.min() < 1 or values.max() >= 10**width):
+        raise IdFormatError(f"ID numbers must be within 1..{10**width - 1} (width {width})")
+    return values.astype("int64").astype(str).str.zfill(width)
+
+
+def logger_ids(shipments: pd.Series, number: int = 1) -> pd.Series:
+    """Vectorised :func:`logger_id` for a column of shipment IDs.
+
+    Args:
+        shipments: Series of shipment IDs (assumed valid; validated by the schemas).
+        number: Assignment number within each shipment (default 1).
+
+    Returns:
+        Series of logger IDs with the same index as ``shipments``.
+    """
+    return "LOG-" + shipments.astype(str) + f"-{_padded(number, 2)}"
+
+
+def _scoped_ids(prefix: str, shipments: pd.Series, sequences: pd.Series) -> pd.Series:
+    """Build ``<prefix>-<shipment-id>-<nn>`` IDs for aligned columns."""
+    _check_lengths(shipments, sequences)
+    padded = _padded_column(sequences, 2).to_numpy()
+    return f"{prefix}-" + shipments.astype(str) + "-" + padded
+
+
+def route_stop_ids(shipments: pd.Series, sequences: pd.Series) -> pd.Series:
+    """Vectorised :func:`route_stop_id`."""
+    return _scoped_ids("RST", shipments, sequences)
+
+
+def custody_event_ids(shipments: pd.Series, sequences: pd.Series) -> pd.Series:
+    """Vectorised :func:`custody_event_id`."""
+    return _scoped_ids("CUS", shipments, sequences)
+
+
+def status_event_ids(shipments: pd.Series, sequences: pd.Series) -> pd.Series:
+    """Vectorised :func:`status_event_id`."""
+    return _scoped_ids("STE", shipments, sequences)
+
+
+def embedded_shipment_ids(child_ids: pd.Series) -> pd.Series:
+    """Extract the shipment ID embedded in shipment-scoped IDs.
+
+    Works for logger, reading, route-stop, custody-event and status-event IDs.
+
+    Args:
+        child_ids: Series of shipment-scoped IDs.
+
+    Returns:
+        Series of shipment IDs (missing where no shipment ID is embedded).
+    """
+    return child_ids.astype(str).str.extract(f"({_SHIPMENT})", expand=False)

@@ -1,0 +1,64 @@
+# Threshold policies (PROJECT_PLAN.md section 5.3). Validated on load by coldchain.config.
+# Effective windows are half-open [effective_from, effective_to); a null effective_to is
+# open-ended. Versions of the same policy_code must not overlap.
+policies:
+  - policy_code: REFRIG_2_8
+    version: 1
+    min_c: 2.0
+    max_c: 8.0
+    abs_min_c: 0.0
+    abs_max_c: 12.0
+    max_single_excursion_min: 30
+    max_cumulative_excursion_min: 60
+    max_reading_gap_min: 30
+    min_coverage_pct: 95.0
+    effective_from: 2026-01-01
+    effective_to: 2026-07-01
+  - policy_code: REFRIG_2_8
+    version: 2                       # tighter single-excursion allowance from 1 July 2026
+    min_c: 2.0
+    max_c: 8.0
+    abs_min_c: 0.0
+    abs_max_c: 12.0
+    max_single_excursion_min: 20
+    max_cumulative_excursion_min: 60
+    max_reading_gap_min: 30
+    min_coverage_pct: 95.0
+    effective_from: 2026-07-01
+    effective_to: null
+  - policy_code: COOL_8_15
+    version: 1
+    min_c: 8.0
+    max_c: 15.0
+    abs_min_c: 5.0
+    abs_max_c: 20.0
+    max_single_excursion_min: 20
+    max_cumulative_excursion_min: 60
+    max_reading_gap_min: 30
+    min_coverage_pct: 95.0
+    effective_from: 2026-01-01
+    effective_to: null
+  - policy_code: FROZEN
+    version: 1
+    min_c: -24.0
+    max_c: -18.0
+    abs_min_c: -30.0
+    abs_max_c: -15.0
+    max_single_excursion_min: 30
+    max_cumulative_excursion_min: 60
+    max_reading_gap_min: 30
+    min_coverage_pct: 95.0
+    effective_from: 2026-01-01
+    effective_to: null
+  - policy_code: AMBIENT_15_25
+    version: 1
+    min_c: 15.0
+    max_c: 25.0
+    abs_min_c: 10.0
+    abs_max_c: 30.0
+    max_single_excursion_min: 60
+    max_cumulative_excursion_min: 120
+    max_reading_gap_min: 30
+    min_coverage_pct: 95.0
+    effective_from: 2026-01-01
+    effective_to: null

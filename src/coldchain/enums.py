@@ -1,9 +1,11 @@
-"""All allowed categorical values used across the project.
+"""All allowed categorical values used across the project, and the fixed mappings between them.
 
 Every enum is a :class:`enum.StrEnum`, so members compare equal to their string values and
-serialise naturally to CSV/JSON/YAML.
+serialise naturally to CSV/JSON/YAML. The status/reason/action mappings below are the single
+source of the decision table in ``docs/compliance_rules.md``.
 """
 
+from collections.abc import Iterable
 from enum import StrEnum
 
 
@@ -15,12 +17,15 @@ class Scale(StrEnum):
 
 
 class PartyType(StrEnum):
-    """Role of a party in the supply chain."""
+    """Role of a party (an actor from the brief, represented as data)."""
 
     SUPPLIER = "SUPPLIER"
     CARRIER = "CARRIER"
     WAREHOUSE = "WAREHOUSE"
     RECEIVER = "RECEIVER"
+    PLANNER = "PLANNER"
+    LOGISTICS_ANALYST = "LOGISTICS_ANALYST"
+    OPERATIONS_MANAGER = "OPERATIONS_MANAGER"
 
 
 class ProductCategory(StrEnum):
@@ -119,6 +124,13 @@ class ComplianceStatus(StrEnum):
     NON_COMPLIANT = "NON_COMPLIANT"
 
 
+class PolicySource(StrEnum):
+    """How the applied policy relates to the planner's declared policy."""
+
+    DECLARED_CONFIRMED = "DECLARED_CONFIRMED"
+    PRODUCT_OVERRIDE = "PRODUCT_OVERRIDE"
+
+
 class DecidedAction(StrEnum):
     """Action that follows from a compliance status."""
 
@@ -164,3 +176,86 @@ class IssueType(StrEnum):
     MISSING_DATA_SILENTLY_PASSED = "missing_data_silently_passed"
     CUSTODY_GAP_NOT_FLAGGED = "custody_gap_not_flagged"
     EXCURSION_ACROSS_UNRELATED_SHIPMENTS = "excursion_across_unrelated_shipments"
+
+
+class Layer(StrEnum):
+    """Output layer (sub-folder of ``output/<scale>/``) that a table belongs to."""
+
+    RAW = "raw"
+    COMPLIANCE = "compliance"
+    GROUND_TRUTH = "ground_truth"
+
+
+class TableName(StrEnum):
+    """Every table in the data model; the value is also the file stem on disk."""
+
+    PARTIES = "parties"
+    THRESHOLD_POLICIES = "threshold_policies"
+    PRODUCTS = "products"
+    PACKAGING = "packaging"
+    LOTS = "lots"
+    DEVICES = "devices"
+    SHIPMENTS = "shipments"
+    SHIPMENT_LOTS = "shipment_lots"
+    LOGGERS = "loggers"
+    TEMPERATURE_READINGS = "temperature_readings"
+    ROUTE_STOPS = "route_stops"
+    CUSTODY_EVENTS = "custody_events"
+    SHIPMENT_STATUS_EVENTS = "shipment_status_events"
+    EXCURSION_REPORTS = "excursion_reports"
+    EXCURSION_REPORT_READINGS = "excursion_report_readings"
+    COMPLIANCE_DECISIONS = "compliance_decisions"
+    COMPLIANCE_STATUS_EVENTS = "compliance_status_events"
+    EXPECTED_OUTCOMES = "expected_outcomes"
+    ANOMALIES = "anomalies"
+
+
+STATUS_SEVERITY: dict[ComplianceStatus, int] = {
+    ComplianceStatus.COMPLIANT: 1,
+    ComplianceStatus.COMPLIANT_WITH_WARNINGS: 2,
+    ComplianceStatus.INCONCLUSIVE: 3,
+    ComplianceStatus.NON_COMPLIANT: 4,
+}
+"""Severity of each compliance status (higher is worse); see docs/compliance_rules.md."""
+
+STATUS_ACTION: dict[ComplianceStatus, DecidedAction] = {
+    ComplianceStatus.COMPLIANT: DecidedAction.RELEASE,
+    ComplianceStatus.COMPLIANT_WITH_WARNINGS: DecidedAction.RELEASE,
+    ComplianceStatus.INCONCLUSIVE: DecidedAction.REVIEW,
+    ComplianceStatus.NON_COMPLIANT: DecidedAction.QUARANTINE,
+}
+"""The action that follows from each compliance status."""
+
+REASON_STATUS: dict[ReasonCode, ComplianceStatus | None] = {
+    ReasonCode.ABSOLUTE_LIMIT_BREACH: ComplianceStatus.NON_COMPLIANT,
+    ReasonCode.SINGLE_DURATION_BREACH: ComplianceStatus.NON_COMPLIANT,
+    ReasonCode.CUMULATIVE_DURATION_BREACH: ComplianceStatus.NON_COMPLIANT,
+    ReasonCode.LOGGER_NOT_ASSIGNED: ComplianceStatus.INCONCLUSIVE,
+    ReasonCode.DATA_GAP: ComplianceStatus.INCONCLUSIVE,
+    ReasonCode.LOW_COVERAGE: ComplianceStatus.INCONCLUSIVE,
+    ReasonCode.CUSTODY_GAP: ComplianceStatus.INCONCLUSIVE,
+    ReasonCode.CALIBRATION_EXPIRED: ComplianceStatus.INCONCLUSIVE,
+    ReasonCode.EXCURSION_WITHIN_ALLOWANCE: ComplianceStatus.COMPLIANT_WITH_WARNINGS,
+    ReasonCode.NEAR_LIMIT_UNCERTAIN: ComplianceStatus.COMPLIANT_WITH_WARNINGS,
+    ReasonCode.POLICY_MISMATCH_DECLARED: ComplianceStatus.COMPLIANT_WITH_WARNINGS,
+    ReasonCode.LONG_DWELL: ComplianceStatus.COMPLIANT_WITH_WARNINGS,
+    ReasonCode.CARRIER_STATUS_CONTRADICTED: None,
+}
+"""Status each reason code triggers; ``None`` means informational (does not affect status)."""
+
+
+def worst_status(reason_codes: Iterable[ReasonCode | str]) -> ComplianceStatus:
+    """Return the most severe status triggered by a set of reason codes.
+
+    Args:
+        reason_codes: Reason codes (enum members or their string values).
+
+    Returns:
+        The most severe triggered status, or ``COMPLIANT`` if none triggers a status.
+
+    Raises:
+        ValueError: If a code is not a valid :class:`ReasonCode`.
+    """
+    triggered = [REASON_STATUS[ReasonCode(code)] for code in reason_codes]
+    statuses = [status for status in triggered if status is not None]
+    return max(statuses, key=STATUS_SEVERITY.__getitem__, default=ComplianceStatus.COMPLIANT)
