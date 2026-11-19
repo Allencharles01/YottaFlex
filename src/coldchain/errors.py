@@ -19,3 +19,11 @@ class IdFormatError(ColdchainError, ValueError):
 
 class SchemaValidationError(ColdchainError):
     """Raised when a table fails its pandera schema (see :mod:`coldchain.schemas`)."""
+
+
+class GenerationError(ColdchainError):
+    """Raised when the data generator cannot satisfy an invariant (e.g. no free device)."""
+
+
+class TableIOError(ColdchainError):
+    """Raised when a table file is missing, unreadable or has the wrong columns."""

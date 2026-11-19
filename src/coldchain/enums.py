@@ -186,6 +186,13 @@ class Layer(StrEnum):
     GROUND_TRUTH = "ground_truth"
 
 
+class FileFormat(StrEnum):
+    """On-disk table format; the value is also the file extension."""
+
+    PARQUET = "parquet"
+    CSV = "csv"
+
+
 class TableName(StrEnum):
     """Every table in the data model; the value is also the file stem on disk."""
 

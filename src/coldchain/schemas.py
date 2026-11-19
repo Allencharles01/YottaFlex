@@ -134,6 +134,38 @@ def overlapping_policy_versions(policies: pd.DataFrame) -> pd.Series:
     return overlaps.reindex(policies.index).fillna(False).astype(bool)
 
 
+def effective_policy_ids(
+    policies: pd.DataFrame, codes: pd.Series, instants: pd.Series
+) -> pd.Series:
+    """Resolve, per row, the policy version of a code that is effective at an instant.
+
+    Windows are half-open ``[effective_from, effective_to)`` with dates read as UTC midnight and
+    a null ``effective_to`` open-ended (DECISIONS.md #12).
+
+    Args:
+        policies: Frame with ``policy_id``, ``policy_code``, ``effective_from``, ``effective_to``.
+        codes: Policy code per row.
+        instants: UTC timestamp per row, aligned with ``codes``.
+
+    Returns:
+        Series of policy IDs aligned with ``codes``; missing where no version is effective.
+    """
+    start = pd.to_datetime(policies["effective_from"]).dt.tz_localize("UTC")
+    end = pd.to_datetime(policies["effective_to"].fillna(date.max)).dt.tz_localize("UTC")
+    windows = pd.DataFrame(
+        {"policy_code": policies["policy_code"], "policy_id": policies["policy_id"], "s": start}
+    ).assign(e=end)
+    rows = pd.DataFrame(
+        {"policy_code": codes.to_numpy(), "t": instants.to_numpy(), "row": np.arange(len(codes))}
+    )
+    matched = rows.merge(windows, on="policy_code", how="inner")
+    matched = matched[(matched["s"] <= matched["t"]) & (matched["t"] < matched["e"])]
+    resolved = matched.drop_duplicates("row").set_index("row")["policy_id"]
+    result = resolved.reindex(np.arange(len(codes)))
+    result.index = codes.index
+    return result
+
+
 # --------------------------------------------------------------------------------------------
 # Column builders (metadata["role"] lets tests introspect the schemas)
 # --------------------------------------------------------------------------------------------

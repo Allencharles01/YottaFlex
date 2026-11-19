@@ -112,6 +112,65 @@ def _mutations() -> list[tuple[str, Any, str]]:
             "custody_gap_not_flagged",
         ),
         ("zero dwell threshold", setv(["long_dwell_threshold_min"], 0), "long_dwell"),
+        ("missing generation", drop("generation"), "generation"),
+        (
+            "baseline dwell above long-dwell threshold",
+            setv(["generation", "routes", "dwell_min"], {"min": 20, "max": 121}),
+            "dwell_min.max must be <= long_dwell_threshold_min",
+        ),
+        (
+            "turnaround shorter than reading interval",
+            setv(["generation", "devices", "turnaround_min"], 5),
+            "turnaround_min must be >= reading_interval_min",
+        ),
+        (
+            "missing party type",
+            lambda d: d["generation"]["parties"].pop("PLANNER"),
+            "missing keys: PLANNER",
+        ),
+        ("zero parties of a type", setv(["generation", "parties", "CARRIER"], 0), "at least 1"),
+        (
+            "duplicate party labels",
+            setv(["generation", "party_name_labels", "RECEIVER"], "Pharma"),
+            "distinct",
+        ),
+        (
+            "utilisation of 1",
+            setv(["generation", "lots", "utilisation"], {"min": 0.5, "max": 1.0}),
+            "utilisation",
+        ),
+        (
+            "range max < min",
+            setv(["generation", "lots_per_shipment"], {"min": 3, "max": 1}),
+            "must be >= min",
+        ),
+        ("zero lots per shipment", setv(["generation", "lots_per_shipment", "min"], 0), ">= 1"),
+        (
+            "uncertainty above 1",
+            setv(["generation", "devices", "uncertainty_c"], {"min": 0.2, "max": 1.5}),
+            "uncertainty_c",
+        ),
+        ("no device models", setv(["generation", "devices", "models"], []), "models"),
+        (
+            "negative calibration offset",
+            setv(["generation", "devices", "calibrated_before_window_days"], {"min": -1, "max": 5}),
+            "calibrated_before_window_days.min",
+        ),
+        (
+            "too many intermediate stops",
+            setv(["generation", "routes", "intermediate_stops"], {"min": 0, "max": 98}),
+            "<= 97",
+        ),
+        (
+            "negative logger lead",
+            setv(["generation", "logger_lead_min"], {"min": -5, "max": 5}),
+            "logger_lead_min.min",
+        ),
+        (
+            "unknown generation key",
+            setv(["generation", "lots", "colour"], "blue"),
+            "colour",
+        ),
     ]
 
 

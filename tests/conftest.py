@@ -311,3 +311,32 @@ def build_valid_tables() -> dict[TableName, pd.DataFrame]:
 def valid_tables() -> dict[TableName, pd.DataFrame]:
     """A fresh, valid one-shipment sample of every table."""
     return build_valid_tables()
+
+
+# --------------------------------------------------------------------------------------------
+# Generated starter-scale data (Phase 2+). Session-scoped: tests must not mutate the frames.
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def app_config():
+    """The validated default configuration."""
+    from coldchain.config import load_config
+
+    return load_config()
+
+
+@pytest.fixture(scope="session")
+def reference():
+    """The validated default reference data."""
+    from coldchain.config import load_reference
+
+    return load_reference()
+
+
+@pytest.fixture(scope="session")
+def starter_tables(app_config, reference) -> dict[TableName, pd.DataFrame]:
+    """Master and shipment tables generated at starter scale with the default seed."""
+    from coldchain.generate import generate_master_tables
+
+    return generate_master_tables(app_config, reference, "starter")

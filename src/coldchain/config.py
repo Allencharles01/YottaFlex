@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from coldchain.enums import (
     IssueType,
     PackagingType,
+    PartyType,
     PolicyCode,
     ProductCategory,
     Scale,
@@ -33,6 +34,9 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
 
 DEFAULT_REFERENCE_DIR = PROJECT_ROOT / "config" / "reference"
 """Directory holding the reference-data YAML files."""
+
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+"""Root of the generated output (``output/<scale>/<layer>/``); git-ignored."""
 
 REFERENCE_FILES: dict[str, str] = {
     "policies": "threshold_policies.yaml",
@@ -90,6 +94,129 @@ class TripDurationHours(_StrictModel):
         return self
 
 
+class IntRange(_StrictModel):
+    """Inclusive range of integers (``min`` may be negative, e.g. an early departure)."""
+
+    min: int
+    max: int
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "IntRange":
+        if self.max < self.min:
+            raise ValueError(f"max ({self.max}) must be >= min ({self.min})")
+        return self
+
+
+class FloatRange(_StrictModel):
+    """Inclusive range of floats."""
+
+    min: float
+    max: float
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "FloatRange":
+        if self.max < self.min:
+            raise ValueError(f"max ({self.max}) must be >= min ({self.min})")
+        return self
+
+
+def _require_non_negative(field: str, value: IntRange | FloatRange) -> None:
+    """Fail if a range has a negative lower bound."""
+    if value.min < 0:
+        raise ValueError(f"{field}.min must be >= 0, got {value.min}")
+
+
+class LotGeneration(_StrictModel):
+    """How lots are generated per product."""
+
+    min_per_product: int = Field(ge=1)
+    shipments_per_lot: float = Field(gt=0)
+    manufacture_lead_days: int = Field(ge=0)
+    on_hold_rate: float = Field(ge=0, lt=1)
+    utilisation: FloatRange
+
+    @model_validator(mode="after")
+    def _check_utilisation(self) -> "LotGeneration":
+        if not 0 < self.utilisation.min <= self.utilisation.max < 1:
+            raise ValueError("utilisation must satisfy 0 < min <= max < 1")
+        return self
+
+
+class DeviceGeneration(_StrictModel):
+    """How physical logger devices are generated and scheduled."""
+
+    models: tuple[str, ...] = Field(min_length=1)
+    uncertainty_c: FloatRange
+    calibration_validity_days: int = Field(ge=1)
+    calibrated_before_window_days: IntRange
+    turnaround_min: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> "DeviceGeneration":
+        if not 0 < self.uncertainty_c.min <= self.uncertainty_c.max <= 1:
+            raise ValueError("uncertainty_c must satisfy 0 < min <= max <= 1")
+        _require_non_negative("calibrated_before_window_days", self.calibrated_before_window_days)
+        if any(not m.strip() or len(m) > 40 for m in self.models):
+            raise ValueError("device models must be non-empty and at most 40 characters")
+        return self
+
+
+class RouteGeneration(_StrictModel):
+    """How routes (stops, dwell and drive times) are generated."""
+
+    intermediate_stops: IntRange
+    cross_dock_share: float = Field(ge=0, le=1)
+    hub_detour_jitter: float = Field(ge=0, lt=1)
+    dwell_min: IntRange
+    planned_dwell_min: int = Field(ge=0)
+    road_factor: float = Field(ge=1)
+    average_speed_kmh: float = Field(gt=0)
+    drive_time_factor: FloatRange
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> "RouteGeneration":
+        _require_non_negative("intermediate_stops", self.intermediate_stops)
+        if self.intermediate_stops.max > 97:  # route-stop sequences are 2 digits (1..99)
+            raise ValueError("intermediate_stops.max must be <= 97")
+        _require_non_negative("dwell_min", self.dwell_min)
+        if self.drive_time_factor.min <= 0:
+            raise ValueError("drive_time_factor.min must be > 0")
+        return self
+
+
+class GenerationConfig(_StrictModel):
+    """Knobs of the master-data generator (Phase 2)."""
+
+    parties: dict[PartyType, int]
+    party_name_labels: dict[PartyType, str]
+    party_active_lead_days: IntRange
+    lots: LotGeneration
+    lots_per_shipment: IntRange
+    devices: DeviceGeneration
+    routes: RouteGeneration
+    departure_delay_min: IntRange
+    logger_lead_min: IntRange
+    logger_tail_min: IntRange
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> "GenerationConfig":
+        _require_all_keys("parties", self.parties, PartyType)
+        _require_all_keys("party_name_labels", self.party_name_labels, PartyType)
+        if any(count < 1 for count in self.parties.values()):
+            raise ValueError("parties: every party type needs at least 1 party")
+        if sum(self.parties.values()) > 9999:  # party IDs have 4 digits
+            raise ValueError("parties: at most 9999 parties in total")
+        labels = list(self.party_name_labels.values())
+        if any(not label.strip() for label in labels) or len(set(labels)) != len(labels):
+            raise ValueError("party_name_labels must be non-empty and distinct")
+        _require_non_negative("party_active_lead_days", self.party_active_lead_days)
+        if self.lots_per_shipment.min < 1:
+            raise ValueError("lots_per_shipment.min must be >= 1")
+        _require_non_negative("logger_lead_min", self.logger_lead_min)
+        _require_non_negative("logger_tail_min", self.logger_tail_min)
+        return self
+
+
 class AppConfig(_StrictModel):
     """Validated top-level configuration."""
 
@@ -101,12 +228,23 @@ class AppConfig(_StrictModel):
     scenario_weights: dict[Scenario, float]
     injection_rates: dict[IssueType, float]
     long_dwell_threshold_min: int = Field(gt=0)
+    generation: GenerationConfig
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "AppConfig":
         _require_all_keys("scales", self.scales, Scale)
         _require_all_keys("scenario_weights", self.scenario_weights, Scenario)
         _require_all_keys("injection_rates", self.injection_rates, IssueType)
+        if self.generation.routes.dwell_min.max > self.long_dwell_threshold_min:
+            raise ValueError(
+                "generation.routes.dwell_min.max must be <= long_dwell_threshold_min "
+                "(baseline stops never trigger LONG_DWELL)"
+            )
+        if self.generation.devices.turnaround_min < self.reading_interval_min:
+            raise ValueError(
+                "generation.devices.turnaround_min must be >= reading_interval_min "
+                "(a device's assignment windows must not share a reading instant)"
+            )
 
         if any(w < 0 for w in self.scenario_weights.values()):
             raise ValueError("scenario_weights must all be >= 0")
