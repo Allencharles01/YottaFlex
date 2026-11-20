@@ -13,4 +13,6 @@
 | [2026-11-20_phase-6.md](2026-11-20_phase-6.md) | `0bd6cd44-0f3f-4f02-96a1-04d49aa5fb41` | 2026-11-20 03:48 UTC | 2026-11-20 05:58 UTC | 2 | 63 | 128 | Phase 6 validate and evaluate |
 | [2026-11-20_phase-7.md](2026-11-20_phase-7.md) | `6a55e2c2-d963-4285-8d4b-6862c5dbe27b` | 2026-11-20 06:00 UTC | 2026-11-20 07:37 UTC | 2 | 57 | 94 | Phase 7 full-scale pipeline and export |
 | [2026-11-20_phase-8.md](2026-11-20_phase-8.md) | `8e43d172-d416-4e15-b7e6-1d9a92ad7751` | 2026-11-20 07:49 UTC | 2026-11-20 09:49 UTC | 3 | 43 | 74 | Phase 8 reproducibility and observability |
-| [2026-11-20_prompt-history-export-script.md](2026-11-20_prompt-history-export-script.md) | `79e6e516-6ce7-4df5-a44d-c6121e699ec0` | 2026-11-20 10:05 UTC | 2026-11-20 10:27 UTC | 2 | 7 | 19 | Prompt history export script |
+| [2026-11-20_prompt-history-export-script.md](2026-11-20_prompt-history-export-script.md) | `79e6e516-6ce7-4df5-a44d-c6121e699ec0` | 2026-11-20 10:05 UTC | 2026-11-20 10:33 UTC | 2 | 8 | 20 | Prompt history export script |
+| [2026-11-20_phase-9.md](2026-11-20_phase-9.md) | `4df1653e-a037-4b6d-9c89-d28ba6f3f1f0` | 2026-11-20 11:50 UTC | 2026-11-20 13:53 UTC | 5 | 56 | 111 | Phase 9 dashboard |
+| [2026-11-20_ai-usage-disclosure-and-final-prompt-history.md](2026-11-20_ai-usage-disclosure-and-final-prompt-history.md) | `37d1be1c-95ce-4a57-9d15-2a5539741e0e` | 2026-11-20 14:35 UTC | 2026-11-20 14:36 UTC | 1 | 4 | 4 | AI usage disclosure and final prompt history |

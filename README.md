@@ -32,6 +32,8 @@ An optional read-only [dashboard](#dashboard) shows the results in a browser on 
 The people in the brief (supplier, planner, carrier, analyst, operations manager) appear as
 *data* (parties in the tables).
 
+How AI was used: see [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
+
 ## Contents
 
 - [Architecture](#architecture)
@@ -515,7 +517,7 @@ its manifest, and compare `dataset_sha256`. Or run `sha256sum` over the files li
   [`brief.md`](docs/brief.md), [`data_dictionary.md`](docs/data_dictionary.md),
   [`er_diagram.md`](docs/er_diagram.md), [`compliance_rules.md`](docs/compliance_rules.md),
   [`anomaly_catalogue.md`](docs/anomaly_catalogue.md), [`evaluation.md`](docs/evaluation.md),
-  [`BACKLOG.md`](docs/BACKLOG.md)
+  [`BACKLOG.md`](docs/BACKLOG.md), [`AI_USAGE.md`](docs/AI_USAGE.md)
 
 ## Known issues
 
