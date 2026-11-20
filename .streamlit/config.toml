@@ -1,0 +1,13 @@
+# Streamlit settings for the read-only viewer (app/streamlit_app.py, DECISIONS.md #122).
+[browser]
+# No usage statistics are sent anywhere.
+gatherUsageStats = false
+
+[server]
+# Local only: listen on localhost.
+address = "localhost"
+headless = true
+runOnSave = false
+
+[client]
+toolbarMode = "minimal"

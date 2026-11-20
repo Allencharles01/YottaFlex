@@ -403,6 +403,44 @@ def read_table(
     return frame
 
 
+def read_table_rows(
+    table: TableName, directory: Path, column: str, values: Iterable[str]
+) -> pd.DataFrame:
+    """Read only the Parquet rows of a table whose ``column`` is in ``values``.
+
+    The filter is applied by pyarrow while reading, so only the matching rows are converted to
+    pandas. The streamlit viewer uses this to load one shipment's readings out of 1.16 million.
+
+    Args:
+        table: The table to read.
+        directory: Directory holding the Parquet file.
+        column: A column of the table's schema.
+        values: The accepted values; an empty collection gives an empty frame.
+
+    Returns:
+        The matching rows, in file order, with the schema's columns and dtypes.
+
+    Raises:
+        TableIOError: If the file is missing or unreadable, or ``column`` is not in the schema.
+    """
+    if column not in SCHEMAS[table].columns:
+        raise TableIOError(f"{table.value} has no column {column!r}")
+    path = table_path(Path(directory), table, FileFormat.PARQUET)
+    if not path.is_file():
+        raise TableIOError(f"Table file not found: {path}")
+    accepted = sorted(set(values))
+    try:
+        if accepted:
+            raw = pq.read_table(path, filters=[(column, "in", accepted)]).to_pandas()
+        else:
+            raw = pq.read_table(path).schema.empty_table().to_pandas()
+    except (OSError, ValueError) as exc:
+        raise TableIOError(f"Could not read {path}: {exc}") from exc
+    frame = coerce_to_schema(table, raw)
+    validate(table, frame)
+    return frame
+
+
 def read_tables(
     tables: Iterable[TableName], directory: Path, fmt: FileFormat = FileFormat.PARQUET
 ) -> dict[TableName, pd.DataFrame]:

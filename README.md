@@ -28,6 +28,7 @@ This project is a **reproducible Python data pipeline** that does exactly that, 
    not.
 
 It is a batch pipeline, not a live tracking app. There are no users, logins or network calls.
+An optional read-only [dashboard](#dashboard) shows the results in a browser on your machine.
 The people in the brief (supplier, planner, carrier, analyst, operations manager) appear as
 *data* (parties in the tables).
 
@@ -38,6 +39,7 @@ The people in the brief (supplier, planner, carrier, analyst, operations manager
 - [CLI reference](#cli-reference)
 - [Outputs explained](#outputs-explained)
 - [How to trace a decision (worked example)](#how-to-trace-a-decision-worked-example)
+- [Dashboard](#dashboard)
 - [Evaluation results](#evaluation-results)
 - [Reproducibility and performance](#reproducibility-and-performance)
 - [Design decisions](#design-decisions)
@@ -116,6 +118,7 @@ coldchain run-all --scale starter        # whole pipeline, 50 shipments, about 1
 cat output/starter/run_summary.json      # what each stage did, how long it took
 coldchain reproduce --scale starter      # same seed → identical files (about 25 s)
 pytest                                   # full test suite (pytest -m "not slow" for a fast run)
+streamlit run app/streamlit_app.py       # read-only dashboard over output/ (see Dashboard)
 ```
 
 `run-all --scale full` (5,000 shipments) takes about 4 minutes and needs about 2 GB of RAM and
@@ -123,7 +126,7 @@ pytest                                   # full test suite (pytest -m "not slow"
 
 **Dependencies.** `pyproject.toml` declares version ranges. The lockfiles pin the exact versions
 the test suite ran against, each with its sha256 hashes: `requirements.lock` (runtime) and
-`requirements-dev.lock` (runtime plus tests, lint and audit). With `--require-hashes`, pip
+`requirements-dev.lock` (runtime plus tests, lint, audit and the streamlit dashboard). With `--require-hashes`, pip
 refuses any file whose hash differs. `pip install -e ".[dev]"` also works, but resolves the
 newest versions within the ranges. To refresh the locks after upgrading the venv, run
 `scripts/lock_dependencies.sh` (needs `uv` and network access). `tests/test_lockfile.py` fails
@@ -290,6 +293,55 @@ WHERE d.shipment_id = 'SHP-2026-000018'
 ORDER BY t.recorded_at;
 ```
 
+## Dashboard
+
+A read-only streamlit viewer over the files `run-all` wrote. There is no login, it never
+writes to `output/`, and it never runs the pipeline.
+
+```bash
+pip install --require-hashes -r requirements-dev.lock && pip install --no-deps -e .  # includes it
+# or, without the lockfile:  pip install -e ".[dashboard]"
+coldchain run-all --scale starter          # the viewer needs this output first
+streamlit run app/streamlit_app.py         # then open http://localhost:8501
+```
+
+Pick the scale in the sidebar. If its output is missing (for example in a fresh clone), every
+page says *Run `coldchain run-all --scale <scale>` first*. To read another output root, set
+`COLDCHAIN_OUTPUT_DIR=/path/to/output`.
+
+![Overview page: KPI tiles and shipments by status and by reason code](docs/images/overview.png)
+
+*Overview (starter scale): 50 shipments, 84 % compliant, 4 non-compliant, 4 inconclusive and 13
+excursion reports, with shipments by status and by reason code.*
+
+![Temperature Chart page for SHP-2026-000018](docs/images/temperature_chart.png)
+
+*Temperature Chart for SHP-2026-000018: the readings stay in the green −24 to −18 °C band
+except for one red 50-minute window (EXCR-2026-000003) that peaks just below the dashed
+−15 °C absolute limit, so the shipment is NON_COMPLIANT (SINGLE_DURATION_BREACH).*
+
+![Data Quality page: validation summary and evaluation](docs/images/data_quality.png)
+
+*Data Quality: 133 validation checks with 0 integrity findings and the 6 business-rule checks
+that the injected anomalies trip, then the evaluation verdict (PASS, 50 / 50 shipments fully
+correct).*
+
+| Page | What it shows |
+|---|---|
+| Overview | KPI tiles (shipments, % compliant = COMPLIANT + COMPLIANT_WITH_WARNINGS, non-compliant, inconclusive, excursion reports), shipments per status and per reason code |
+| Shipment Explorer | Search a shipment: its decision, lots and products, packaging, logger, device and calibration, route stops, custody timeline (broken links explained), and the status history (raw lifecycle, then the engine's events) |
+| Temperature Chart | The readings against the applied policy: green allowed band, dashed absolute limits, red windows for the engine's excursion reports, grey windows for gaps in the trusted readings (darker when the gap breaks the policy), and crosses for readings from the wrong device |
+| Excursion Reports | Filter by direction, breach type, policy or ID. Each report shows its policy and its linked readings (from `excursion_report_readings`), and opens its shipment's chart |
+| Custody & Data Gaps | Shipments flagged CUSTODY_GAP, DATA_GAP, LOW_COVERAGE or LOGGER_NOT_ASSIGNED, with the custody chain and the reading gaps of each |
+| Data Quality | The validation summary (and the clean baseline's), the evaluation metrics and confusion matrix, the answer key vs the engine per shipment, and the `coldchain reproduce` result (or how to produce it) |
+
+Everything taken from `ground_truth/` is labelled **Answer key (ground truth)**, and its
+columns start with `answer_key_`, so it is never mistaken for engine output. At full scale
+(1.16 million readings) a page loads in about a second the first time and in about 0.1 s
+after that: tables are cached per file, and the chart reads only the selected shipment's
+readings (a pyarrow filter). Streamlit's usage statistics are switched off in
+`.streamlit/config.toml`, and the server listens on `localhost` only.
+
 ## Evaluation results
 
 Default seed `20261022`. Every number comes from `evaluation/evaluation_report.json`;
@@ -366,7 +418,7 @@ literal-INSERT path is slow (about 70 µs per row), and `--no-verify-sql` skips 
 ## Design decisions
 
 Every decision, with its date and reason, is in [`docs/DECISIONS.md`](docs/DECISIONS.md)
-(119 entries). The ones that shape the project most:
+(131 entries). The ones that shape the project most:
 
 - **Device vs logger** (#1): 1,000 physical *devices* are reused across 5,000 shipments, and a
   *logger* is one device assigned to one shipment (`LOG-<shipment-id>-01`).
@@ -433,7 +485,7 @@ through `manifest.json` and `provenance/`.
 | Tampering and stale results | Every stage records the sha256 of every input and output. `export` verifies the whole chain (unchanged files, one config, one seed, PASS verdict) and refuses otherwise. The bundle is written to a staging folder and swapped in only on success. | `provenance.py`, `pipeline.run_export` |
 | Audit trail | `manifest.json` (per-file sha256 and rows, `dataset_sha256`, `content_sha256`, git commit and dirty flag, every stage's command and seed); `run_summary.json` (status, timing and memory per stage); `reproducibility_check.json`. Raw history is append-only: the engine writes its status events to a separate table. | `export/manifest.py`, `observability.py` |
 | Determinism | No wall-clock time in any data file; the only timestamps live in blocks excluded from the content hashes. Tables are sorted by primary key, and floats use fixed rounding. | `coldchain reproduce` |
-| Attack surface | There is no server, authentication, network access or subprocess with user input. The only subprocess is `git` with a fixed argument list (for the commit hash). | `provenance.git_state` |
+| Attack surface | The pipeline has no server, authentication, network access or subprocess with user input. The only subprocess is `git` with a fixed argument list (for the commit hash). The optional dashboard is a local streamlit server on `localhost`, read-only (no write call, no pipeline import, checked by an AST scan and a before/after checksum test), with usage statistics off. | `provenance.git_state`, `tests/test_viewer_app.py`, `.streamlit/config.toml` |
 
 To audit a delivered bundle: re-run `coldchain run-all --scale <scale>` at the commit named in
 its manifest, and compare `dataset_sha256`. Or run `sha256sum` over the files listed in
@@ -453,6 +505,9 @@ its manifest, and compare `dataset_sha256`. Or run `sha256sum` over the files li
     `validation/` (integrity checks), `evaluation/` (metrics), `export/` (CSV/JSON/SQL
     bundle, manifest, reproducibility comparison)
 - `tests/`: pytest suite, one test file per module
+- `app/`: the streamlit dashboard (`streamlit_app.py` and one file per page in `views/`); its
+  logic is in `src/coldchain/viewer/` (`data.py` reads, `views.py` and `charts.py` are pure,
+  `session.py` holds the streamlit caching and widgets)
 - `scripts/`: `plot_shipment.py` (one shipment's readings as a PNG) and `lock_dependencies.sh`
   (regenerates the lockfiles)
 - `requirements.lock`, `requirements-dev.lock`: hash-pinned dependency versions
@@ -473,5 +528,5 @@ its manifest, and compare `dataset_sha256`. Or run `sha256sum` over the files li
   stays on by default, because it is part of the deliverable.
 - **Peak memory inside `run-all` is an upper bound.** One process runs every stage, so a stage's
   peak includes memory still held from earlier stages.
-- **The streamlit viewer** (Phase 9, optional) is not built, and the `dashboard` extra is not in
-  the lockfile.
+- **The dashboard reads whatever is on disk.** If a pipeline stage is re-run while the viewer is
+  open, a page can briefly combine files from two runs. Reload after the run finishes.

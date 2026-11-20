@@ -49,7 +49,12 @@ def test_every_pin_carries_hashes(lock) -> None:
     ("lock", "requirements"),
     [
         (RUNTIME, _project()["dependencies"]),
-        (DEV, _project()["dependencies"] + _project()["optional-dependencies"]["dev"]),
+        (
+            DEV,
+            _project()["dependencies"]
+            + _project()["optional-dependencies"]["dev"]
+            + _project()["optional-dependencies"]["dashboard"],
+        ),
     ],
     ids=["runtime", "dev"],
 )
