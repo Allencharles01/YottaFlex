@@ -29,6 +29,7 @@ So a typical phase looks like this in the transcripts:
 
 | Path | Contents |
 |---|---|
+| [`../docs/PROMPT_HISTORY.md`](../docs/PROMPT_HISTORY.md) | A summary of the prompts, grouped by purpose. |
 | [`claude_code/INDEX.md`](claude_code/INDEX.md) | One row per session: file, session ID, start/end time, number of prompts, replies and tool calls. |
 | `claude_code/<date>_phase-<n>.md` | One Claude Code session per file, in chronological order: Phase 0 (scaffold and plan) to Phase 8 (run-all, reproduce, final README). |
 | `claude_code/<date>_<title>.md` | Sessions that were not a numbered phase, e.g. `2026-11-20_prompt-history-export-script.md` (this export). |

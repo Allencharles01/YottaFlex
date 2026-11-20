@@ -32,7 +32,8 @@ An optional read-only [dashboard](#dashboard) shows the results in a browser on 
 The people in the brief (supplier, planner, carrier, analyst, operations manager) appear as
 *data* (parties in the tables).
 
-How AI was used: see [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
+How AI was used: see [`docs/AI_USAGE.md`](docs/AI_USAGE.md). Prompt history summary:
+[`docs/PROMPT_HISTORY.md`](docs/PROMPT_HISTORY.md).
 
 ## Contents
 

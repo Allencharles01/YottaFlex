@@ -86,3 +86,4 @@ The prompt history is in [`prompt_history/`](../prompt_history/) (see "Prompt hi
 
 - [`prompt_history/claude_code/`](../prompt_history/claude_code/): the Claude Code session transcripts, one per phase, exported from VS Code
 - `docs/PROJECT_PLAN.md`: the master prompt, verbatim
+- [`docs/PROMPT_HISTORY.md`](PROMPT_HISTORY.md): a summary of my prompts, grouped by purpose
