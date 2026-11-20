@@ -39,3 +39,11 @@ class ComplianceError(ColdchainError):
 
 class InjectionError(ColdchainError):
     """Raised when the anomaly injector cannot place an anomaly (e.g. too few eligible targets)."""
+
+
+class ValidationError(ColdchainError):
+    """Raised when the validation suite cannot run (e.g. a required input table is missing)."""
+
+
+class EvaluationError(ColdchainError):
+    """Raised when the evaluation cannot run (missing inputs, or a stale validation summary)."""

@@ -288,6 +288,19 @@ class InjectionConfig(_StrictModel):
         return self
 
 
+class EvaluationConfig(_StrictModel):
+    """How strictly ``coldchain evaluate`` judges the metrics (Phase 6)."""
+
+    strict_scales: tuple[Scale, ...] = Field(
+        description="Scales at which every defined metric must be 100 %, else evaluate fails."
+    )
+
+    @model_validator(mode="after")
+    def _check_unique(self) -> "EvaluationConfig":
+        _require_unique("evaluation.strict_scales", list(self.strict_scales))
+        return self
+
+
 class AppConfig(_StrictModel):
     """Validated top-level configuration."""
 
@@ -301,6 +314,7 @@ class AppConfig(_StrictModel):
     long_dwell_threshold_min: int = Field(gt=0)
     generation: GenerationConfig
     injection: InjectionConfig
+    evaluation: EvaluationConfig
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "AppConfig":

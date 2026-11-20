@@ -19,12 +19,17 @@ types or required flags.
 | Nulls | Only fields marked *Required = no* may be null; the rule column says when. |
 | Layers | `raw` = generator/injector input (never contains labels) · `compliance` = engine output · `ground_truth` = answer key (never read by the engine). `baseline/{raw,ground_truth}` = byte-for-byte snapshot of the generator's clean `raw/` tables and `expected_outcomes`, taken before the first injection (not a table layer; never read by the engine). |
 | Ordering | Every table is sorted by its primary key before it is written. |
+| Reports | `validation/validation_summary.{md,json}` (`validation/baseline/` for the snapshot) and `evaluation/evaluation_report.{md,json}` are reports, not tables: Markdown for people, JSON for tools, no wall-clock time, byte-identical on a rerun (see `evaluation.md`). |
 
 **Where each rule is enforced** (tag at the start of each rule):
-**S** = pandera schema (`schemas.py`, single table) · **V** = validation suite (Phase 6, cross-table
-or config-dependent) · **E** = detected by the compliance engine (Phase 4). Rules tagged **E** may
-be broken on purpose by an injected anomaly; they are therefore not schema rules, so anomalous but
-well-formed data still loads.
+**S** = pandera schema (`schemas.py`, single table) · **V** = validation suite (`coldchain
+validate`, cross-table or config-dependent) · **E** = detected by the compliance engine (Phase 4).
+Rules tagged **E** may be broken on purpose by an injected anomaly; they are therefore not schema
+rules, so anomalous but well-formed data still loads. The validation suite also re-checks the S
+rules and the E rules that injections break (device attribution, stream completeness, custody
+continuity, the planner's declaration, the carrier claim) as **business-rule** checks, whose
+findings `coldchain evaluate` must explain. The check catalogue and the metric definitions are in
+[`evaluation.md`](evaluation.md).
 
 ---
 

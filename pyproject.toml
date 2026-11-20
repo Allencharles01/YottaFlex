@@ -25,6 +25,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "matplotlib>=3.8",
+    "pip-audit>=2.7",
 ]
 dashboard = [
     "streamlit>=1.35",

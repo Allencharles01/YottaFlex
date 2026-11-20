@@ -234,6 +234,60 @@ class TableName(StrEnum):
     ANOMALIES = "anomalies"
 
 
+class CheckTier(StrEnum):
+    """How strictly a validation check is enforced (``coldchain validate``, DECISIONS.md #84).
+
+    ``INTEGRITY`` checks must always pass: a failure is a broken pipeline, so ``validate`` exits
+    non-zero. ``BUSINESS_RULE`` checks cover the rules an injected edge case may break on
+    purpose; their findings are reported, and ``coldchain evaluate`` must explain every one.
+    """
+
+    INTEGRITY = "INTEGRITY"
+    BUSINESS_RULE = "BUSINESS_RULE"
+
+
+class CheckCategory(StrEnum):
+    """What a validation check looks at."""
+
+    SCHEMA = "SCHEMA"
+    PRIMARY_KEY = "PRIMARY_KEY"
+    FOREIGN_KEY = "FOREIGN_KEY"
+    ENUM = "ENUM"
+    DUPLICATE = "DUPLICATE"
+    DATE_ORDER = "DATE_ORDER"
+    LIFECYCLE = "LIFECYCLE"
+    RECONCILIATION = "RECONCILIATION"
+    CONSISTENCY = "CONSISTENCY"
+
+
+class CheckStatus(StrEnum):
+    """Outcome of one validation check.
+
+    ``ERROR`` means the check itself could not run on the data (counted like a failure);
+    ``SKIPPED`` means a table it needs is not part of the validated input (e.g. no engine output
+    for the baseline snapshot).
+    """
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ERROR = "ERROR"
+    SKIPPED = "SKIPPED"
+
+
+class DataSource(StrEnum):
+    """Which copy of the raw tables ``coldchain validate`` judges."""
+
+    RAW = "raw"
+    BASELINE = "baseline"
+
+
+class ReportKind(StrEnum):
+    """Report folders under ``output/<scale>/``; the value is the folder name."""
+
+    VALIDATION = "validation"
+    EVALUATION = "evaluation"
+
+
 STATUS_SEVERITY: dict[ComplianceStatus, int] = {
     ComplianceStatus.COMPLIANT: 1,
     ComplianceStatus.COMPLIANT_WITH_WARNINGS: 2,

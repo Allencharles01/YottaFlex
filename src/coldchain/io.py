@@ -20,6 +20,7 @@ Reading converts every column back to the exact physical dtype its schema declar
 written table read back passes its schema and equals the original frame.
 """
 
+import hashlib
 import json
 import logging
 import shutil
@@ -27,10 +28,11 @@ from collections.abc import Iterable, Mapping
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
-from coldchain.enums import FileFormat, Layer, TableName
+from coldchain.enums import FileFormat, Layer, ReportKind, TableName
 from coldchain.errors import TableIOError
 from coldchain.schemas import (
     ISO_TIMESTAMP_FORMAT,
@@ -110,6 +112,11 @@ def table_path(directory: Path, table: TableName, fmt: FileFormat) -> Path:
 def layer_dir(output_root: Path, scale: str, layer: Layer) -> Path:
     """Return the directory of one output layer, e.g. ``output/starter/raw``."""
     return Path(output_root) / scale / layer.value
+
+
+def report_dir(output_root: Path, scale: str, kind: ReportKind) -> Path:
+    """Return a report folder, e.g. ``output/starter/validation``."""
+    return Path(output_root) / scale / kind.value
 
 
 def baseline_dir(output_root: Path, scale: str, layer: Layer) -> Path:
@@ -432,3 +439,67 @@ def _require_parquet(directory: Path, table: TableName) -> None:
     path = table_path(directory, table, FileFormat.PARQUET)
     if not path.is_file():
         raise TableIOError(f"Table file not found: {path} (run `coldchain generate` first)")
+
+
+# --------------------------------------------------------------------------------------------
+# Reports (validation summary, evaluation report)
+# --------------------------------------------------------------------------------------------
+
+
+def file_sha256(path: Path) -> str:
+    """Return the hex sha256 of a file's bytes.
+
+    Raises:
+        TableIOError: If the file cannot be read.
+    """
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise TableIOError(f"Could not read {path}: {exc}") from exc
+
+
+def write_report(
+    directory: Path, stem: str, markdown: str, payload: Mapping[str, Any]
+) -> tuple[Path, Path]:
+    """Write a report as ``<stem>.md`` and ``<stem>.json`` (UTF-8, LF line endings).
+
+    Args:
+        directory: Target directory (created if missing).
+        stem: File stem, e.g. ``validation_summary``.
+        markdown: The Markdown text.
+        payload: JSON-serialisable content, written in its own key order.
+
+    Returns:
+        The Markdown and JSON paths.
+    """
+    md_path, json_path = report_paths(directory, stem)
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(markdown, encoding="utf-8", newline="\n")
+    text = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)
+    json_path.write_text(text + "\n", encoding="utf-8", newline="\n")
+    logger.debug("Wrote report %s to %s", stem, md_path.parent)
+    return md_path, json_path
+
+
+def report_paths(directory: Path, stem: str) -> tuple[Path, Path]:
+    """Return the Markdown and JSON paths of a report."""
+    directory = Path(directory)
+    return directory / f"{stem}.md", directory / f"{stem}.{FileFormat.JSON.value}"
+
+
+def read_report(directory: Path, stem: str) -> dict[str, Any]:
+    """Read a report's JSON payload.
+
+    Raises:
+        TableIOError: If the file is missing or is not a JSON object.
+    """
+    _, path = report_paths(directory, stem)
+    if not path.is_file():
+        raise TableIOError(f"Report not found: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TableIOError(f"Could not read {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise TableIOError(f"{path}: expected a JSON object")
+    return payload

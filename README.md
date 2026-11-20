@@ -5,7 +5,7 @@ shipments, loggers, 10-minute temperature readings, custody handoffs), injects l
 and checks per shipment whether it stayed compliant, tracing every conclusion back to specific
 readings and policies. All data is 100% synthetic.
 
-> Status: Phase 5 (edge-case injection and ground truth). See `docs/PROJECT_PLAN.md` for the full plan.
+> Status: Phase 6 (validation suite and evaluation metrics). See `docs/PROJECT_PLAN.md` for the full plan.
 
 ## Quick start
 
@@ -17,6 +17,10 @@ pytest                                      # full suite; `pytest -m "not slow"`
 coldchain generate --scale starter          # writes output/starter/{raw,ground_truth}/*.parquet + *.csv
 coldchain inject --scale starter            # injects the 5 labelled edge cases (optional step)
 coldchain check --scale starter             # reads raw/ only, writes output/starter/compliance/
+coldchain validate --scale starter          # integrity checks, writes output/starter/validation/
+coldchain validate --scale starter --source baseline   # the clean pre-injection snapshot
+coldchain evaluate --scale starter          # engine vs ground truth, writes output/starter/evaluation/
+pip-audit --skip-editable                   # known-vulnerability scan of the installed dependencies
 ```
 
 `coldchain generate` options: `--scale starter|full`, `--seed N` (overrides the config),
@@ -46,6 +50,29 @@ codes, coverage, gaps and excursion totals per shipment) and `compliance_status_
 (UNDER_REVIEW → RELEASED/QUARANTINED, appended after the raw history). Raw files are never
 modified.
 
+`coldchain validate` options: `--scale`, `--source raw|baseline`, `--config`, `--output-dir`.
+It judges data integrity on its own, never reading the ground truth and never reusing the
+engine. It runs 133 checks: primary keys, DuckDB foreign-key joins, enums, schema, duplicates,
+date ordering, lifecycle transitions, cross-table consistency, and arithmetic reconciliation.
+The reconciliation covers lot quantities, `dwell_min`, and excursion durations, coverage and
+gaps recomputed from the readings. It writes `validation/validation_summary.{md,json}`, with
+PASS/FAIL and counts per check and every finding. INTEGRITY checks must pass (exit 1
+otherwise). BUSINESS_RULE checks report the defects that injected anomalies cause on purpose;
+the clean baseline has none.
+
+`coldchain evaluate` options: `--scale`, `--config`, `--output-dir`. Run it after `check` and
+`validate`. It compares the engine with `ground_truth/` and writes
+`evaluation/evaluation_report.{md,json}`. The report holds:
+- precision, recall and F1 per issue type and per reason code;
+- a status confusion matrix;
+- the excursion-duration exact-match rate;
+- accuracy per scenario;
+- the cross-reference of every validation finding to the anomaly that explains it
+  ("unexplained findings: 0").
+
+It exits 1 on any unexplained finding, and at starter scale on any metric below 100 %.
+Definitions: [`docs/evaluation.md`](docs/evaluation.md).
+
 To trace a decision: take a shipment's `excursion_report_ids` in `compliance_decisions.csv`,
 find those rows in `excursion_reports.csv`, follow `excursion_report_readings.csv` to the reading
 IDs, and look them up in `raw/temperature_readings.csv`; `applied_policy_id` names the limits
@@ -62,11 +89,13 @@ decision in the title.
   threshold policies, products, packaging, locations)
 - `src/coldchain/`: the package (`schemas.py` holds the pandera schema of every table, `io.py`
   reads/writes tables, `generate/` holds the data generators, `inject/` the anomaly
-  injectors, `compliance/` the engine)
+  injectors, `compliance/` the engine, `validation/` the integrity checks, `evaluation/` the
+  metrics)
 - `tests/`: pytest suite
 - `docs/`: plan, decisions, brief, and the design documents:
   - [`data_dictionary.md`](docs/data_dictionary.md): every table and field
   - [`er_diagram.md`](docs/er_diagram.md): Mermaid ER diagram
   - [`compliance_rules.md`](docs/compliance_rules.md): decision table and formulas
   - [`anomaly_catalogue.md`](docs/anomaly_catalogue.md): the five injected edge cases
+  - [`evaluation.md`](docs/evaluation.md): validation checks, detection and metric definitions
   - [`BACKLOG.md`](docs/BACKLOG.md): deferred work items

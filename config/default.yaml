@@ -70,3 +70,10 @@ injection:
   # missing_data_silently_passed deletes floor(max_reading_gap_min / interval) consecutive
   # readings (the shortest block that breaches the gap limit) plus this many more.
   missing_extra_readings: { min: 0, max: 6 }
+
+# Evaluation (Phase 6, `coldchain evaluate`). Validated on load by coldchain.config.
+evaluation:
+  # At these scales every defined metric (precision, recall, F1, accuracy, exact-match rate)
+  # must be 100 %, otherwise `evaluate` exits non-zero. Unexplained validation findings fail
+  # the run at every scale. Full is strict too (Phase 6 approval, DECISIONS #95).
+  strict_scales: [starter, full]
