@@ -21,6 +21,7 @@ types or required flags.
 | Ordering | Every table is sorted by its primary key before it is written. |
 | Reports | `validation/validation_summary.{md,json}` (`validation/baseline/` for the snapshot) and `evaluation/evaluation_report.{md,json}` are reports, not tables: Markdown for people, JSON for tools, no wall-clock time, byte-identical on a rerun (see `evaluation.md`). |
 | Provenance and export | `provenance/<stage>.json` (one record per command) and `export/` (the audit bundle with `manifest.json`) are not table layers either; see [Export bundle](#export-bundle-coldchain-export) below. |
+| Run records | `run_summary.json` (one per `coldchain run-all` run) and `reproducibility/reproducibility_check.{md,json}` (`coldchain reproduce`) hold wall-clock timings, kept apart from their hashed content; see [Run records](#run-records-coldchain-run-all-and-reproduce) below. |
 
 **Where each rule is enforced** (tag at the start of each rule):
 **S** = pandera schema (`schemas.py`, single table) · **V** = validation suite (`coldchain
@@ -488,3 +489,30 @@ each), in foreign-key dependency order. SQLite enforces foreign keys only after
 `package_version`, `git`, `config`, and the sha256 of every file read (`inputs`) and written
 (`outputs`), keyed by path relative to the output root. There is no wall-clock time. `export`
 refuses to run unless this chain still matches the files on disk.
+
+## Run records (`coldchain run-all` and `reproduce`)
+
+**`run_summary.json`** (`output/<scale>/run_summary.json`, written by every `run-all` run, also
+when a stage fails; DECISIONS.md #116):
+
+| Field | Content |
+|---|---|
+| `run_summary_version`, `command`, `scale`, `seed`, `package_version`, `git` | the run: its `run-all` command line, the seed the seeded stages used, the code version and commit |
+| `status`, `exit_code` | `PASS` / 0 only when every stage passed; otherwise `FAIL` / 1 |
+| `failed_stage`, `error` | the first failing stage and its message (null on success) |
+| `stages[]` | one entry per stage in run order: `stage`, `status` (`PASS`, `FAIL` or `NOT_RUN`), the single-stage `command` it recorded, `rows` (`<layer>/<table>` → rows written), `details` (verdicts and totals), `error` and `timing` |
+| `stages[].timing`, `timing` | `duration_s`, `peak_rss_mib` and `memory_method` per stage; the run's `total_duration_s` and peak. These are wall-clock measurements, so they differ between runs |
+| `content_sha256` | sha256 of the canonical JSON of everything except the `timing` blocks |
+
+**`reproducibility/reproducibility_check.{md,json}`** (`coldchain reproduce`; DECISIONS.md
+#117–#118). The JSON holds `scale`, `seed`, `control_seed`, `verify_sql`, `verdict` (`PASS` or
+`FAIL`) with `failures`, the comparison method, `totals`, and:
+- `files[]`: one row per file of run1 or run2 (`path` relative to `<scale>/`, `rows_run1`,
+  `rows_run2`, `sha256_run1`, `sha256_run2`, `compared` = `bytes` or `content`, `match`);
+- `control`: the files of run1 and the control run that differ, and the ones that do not;
+- `runs`: each run's command, status, `dataset_sha256` and timings.
+
+Three run records are compared on their content: the manifest without `run`, the run summary
+without `timing`, and `provenance/export.json` without the manifest's digest. Every other file
+is compared byte for byte. The runs themselves live in `reproducibility/runs/` only with
+`--keep-runs`.

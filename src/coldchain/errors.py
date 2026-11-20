@@ -55,3 +55,7 @@ class ExportError(ColdchainError):
 
 class ProvenanceError(ColdchainError):
     """Raised when stage provenance is missing or no longer matches the files (stale pipeline)."""
+
+
+class ReproducibilityError(ColdchainError):
+    """Raised when ``coldchain reproduce`` cannot run (e.g. the control seed equals the seed)."""

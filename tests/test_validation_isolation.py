@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from coldchain import cli
+from coldchain import cli, pipeline
 from coldchain.config import PROJECT_ROOT
 from coldchain.enums import Layer, TableName
 from coldchain.io import BASELINE_DIR
@@ -70,7 +70,10 @@ def test_validation_modules_never_import_the_engine_or_the_answer_key(path: Path
 
 
 def test_validate_command_never_names_the_ground_truth() -> None:
-    source = inspect.getsource(cli.validate) + inspect.getsource(cli.validation_dir)
+    source = "".join(
+        inspect.getsource(obj)
+        for obj in (cli.validate, pipeline.run_validate, pipeline.validation_dir)
+    )
     for name in GROUND_TRUTH_NAMES:
         assert name not in source, name
 

@@ -277,7 +277,12 @@ def verify_chain(
     2. every file a stage read is unchanged since (otherwise that stage is stale);
     3. every file a stage wrote is unchanged, unless a later stage (in pipeline order)
        rewrote it, as ``inject`` rewrites ``raw/``;
-    4. every path in ``required`` (the files the caller will rely on) was written by a stage.
+    4. every path in ``required`` (the files the caller will rely on) was written by a stage;
+    5. every stage that drew random numbers (a record with a non-null ``seed``: ``generate``
+       and ``inject``) used the same seed. The other stages draw none; rules 2 and 3 tie them
+       to the exact files those seeded stages wrote. The pipeline fingerprint leaves the seed
+       out (DECISIONS.md #108), so without this rule ``inject --seed 7`` after a ``generate``
+       with the default seed would pass unnoticed.
 
     Args:
         records: Stage → its record (only the stages that make up the chain).
@@ -310,6 +315,10 @@ def verify_chain(
         for path, digest in record.get("outputs", {}).items():
             if last_writer[path] is stage and current(path) != digest:
                 problems.append(f"{name}: output {path} was modified or removed since")
+    seeds = {s.value: records[s]["seed"] for s in ordered if records[s].get("seed") is not None}
+    if len(set(seeds.values())) > 1:
+        listed = ", ".join(f"{name} seed {seed}" for name, seed in seeds.items())
+        problems.append(f"stages ran with different seeds ({listed}): re-run them with one seed")
     problems += [
         f"{path} was not written by any recorded stage"
         for path in required

@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from coldchain.enums import FileFormat, Layer, PipelineStage, ReportKind, TableName
 from coldchain.errors import TableIOError
@@ -687,6 +688,57 @@ def count_csv_rows(path: Path) -> int:
     if rows == 0:
         raise TableIOError(f"{path}: empty CSV (no header)")
     return rows - 1
+
+
+def count_table_rows(path: Path) -> int | None:
+    """Count the records of a table file; ``None`` for a file that is not a table.
+
+    Parquet: the row count in its metadata. CSV: data rows (:func:`count_csv_rows`). JSON
+    Lines: non-empty lines. JSON: the length of a top-level array (a JSON object, such as a
+    report or a provenance record, is not a table). Any other suffix: ``None``.
+
+    Raises:
+        TableIOError: If the file is missing or unreadable.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise TableIOError(f"File not found: {path}")
+    suffix = path.suffix.lstrip(".")
+    try:
+        if suffix == FileFormat.PARQUET.value:
+            return int(pq.read_metadata(path).num_rows)
+        if suffix == FileFormat.CSV.value:
+            return count_csv_rows(path)
+        if suffix == FileFormat.JSONL.value:
+            return sum(1 for line in read_text_lines(path) if line.strip())
+        if suffix == FileFormat.JSON.value:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return len(payload) if isinstance(payload, list) else None
+    except (OSError, ValueError) as exc:
+        raise TableIOError(f"Could not read {path}: {exc}") from exc
+    return None
+
+
+def describe_files(root: Path) -> dict[str, dict[str, Any]]:
+    """Describe every file under a folder: sha256, size in bytes and record count.
+
+    Args:
+        root: The folder (searched recursively).
+
+    Returns:
+        POSIX path relative to ``root`` → ``{"sha256", "bytes", "rows"}`` (``rows`` from
+        :func:`count_table_rows`), sorted by path.
+    """
+    root = Path(root)
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    return {
+        path.relative_to(root).as_posix(): {
+            "sha256": file_sha256(path),
+            "bytes": file_size(path),
+            "rows": count_table_rows(path),
+        }
+        for path in files
+    }
 
 
 def replace_directory(staging: Path, target: Path) -> Path:

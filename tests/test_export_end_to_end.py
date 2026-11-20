@@ -301,6 +301,20 @@ def test_manifest_records_the_export_settings_separately(manifest, app_config) -
     assert manifest["export_settings"]["sha256"] not in manifest["config"]["files"].values()
 
 
+def test_export_refuses_a_pipeline_that_mixed_seeds(root, tmp_path) -> None:
+    """DECISIONS #108 took the seed out of the config hash; #112 checks it per stage instead."""
+    copy = _copy(root, tmp_path)
+    _ok(copy, "inject", "--seed", "7")  # generate ran with the default seed
+    for command in ("check", "validate", "evaluate"):
+        _ok(copy, command)
+    result = _invoke(copy, "export")
+    assert result.exit_code == 1
+    assert "different seeds (generate seed 20261022, inject seed 7)" in result.output
+    assert (copy / "starter" / "export" / "manifest.json").read_bytes() == (
+        root / "starter" / "export" / "manifest.json"
+    ).read_bytes()
+
+
 def test_export_needs_every_stage(root, tmp_path) -> None:
     copy = _copy(root, tmp_path)
     (copy / "starter" / "provenance" / "check.json").unlink()

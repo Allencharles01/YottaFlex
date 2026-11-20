@@ -310,6 +310,28 @@ class ReportKind(StrEnum):
 
     VALIDATION = "validation"
     EVALUATION = "evaluation"
+    REPRODUCIBILITY = "reproducibility"
+
+
+class StageStatus(StrEnum):
+    """Outcome of one stage in a ``coldchain run-all`` run (``run_summary.json``).
+
+    ``FAIL`` covers both a stage that raised an error and one whose verdict was FAIL (its
+    outputs are written); ``NOT_RUN`` marks the stages after the first failure.
+    """
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_RUN = "NOT_RUN"
+
+
+class LogLevel(StrEnum):
+    """Log levels accepted by ``coldchain --log-level``; the value is the ``logging`` name."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 
 STATUS_SEVERITY: dict[ComplianceStatus, int] = {

@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from coldchain import cli
+from coldchain import cli, pipeline
 from coldchain.compliance import ENGINE_INPUTS
 from coldchain.config import PROJECT_ROOT
 from coldchain.enums import Layer, TableName
@@ -74,7 +74,7 @@ def test_engine_modules_never_import_the_generator(path: Path) -> None:
 
 
 def test_check_command_never_names_the_ground_truth() -> None:
-    source = inspect.getsource(cli.check)
+    source = inspect.getsource(cli.check) + inspect.getsource(pipeline.run_check)
     for name in GROUND_TRUTH_NAMES:
         assert name not in source, name
 

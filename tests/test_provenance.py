@@ -242,3 +242,31 @@ def test_without_the_inject_record_generate_must_match(chain) -> None:
     del records[PipelineStage.INJECT]
     with pytest.raises(ProvenanceError, match="generate: output raw/a was modified"):
         _verify(records, files)
+
+
+def test_seeded_stages_must_share_one_seed(chain) -> None:
+    records, files = chain
+    records[PipelineStage.GENERATE]["seed"] = 20261022
+    records[PipelineStage.INJECT]["seed"] = 7
+    with pytest.raises(
+        ProvenanceError, match=r"different seeds \(generate seed 20261022, inject seed 7\)"
+    ):
+        _verify(records, files)
+
+
+def test_one_seed_across_the_seeded_stages_passes(chain) -> None:
+    records, files = chain
+    for stage in (PipelineStage.GENERATE, PipelineStage.INJECT):
+        records[stage]["seed"] = 20261022
+    records[PipelineStage.CHECK]["seed"] = None  # draws no random numbers
+    _verify(records, files)
+
+
+def test_without_injection_a_single_seeded_stage_needs_no_partner(chain) -> None:
+    records, files = chain
+    del records[PipelineStage.INJECT]
+    records[PipelineStage.GENERATE]["seed"] = 7
+    files["raw/a"], files["gt/e"] = "a1", "e1"
+    records[PipelineStage.CHECK]["inputs"] = {"raw/a": "a1"}
+    records[PipelineStage.VALIDATE]["inputs"] = {"raw/a": "a1", "comp/c": "c1"}
+    _verify(records, files)

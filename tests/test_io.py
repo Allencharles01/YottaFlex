@@ -306,3 +306,49 @@ def test_clear_injection_removes_the_inject_provenance(tmp_path: Path) -> None:
     io.write_json(record, {"stage": "inject"})
     assert record in io.clear_injection(tmp_path, "starter")
     assert not record.exists()
+
+
+# --------------------------------------------------------------------------------------------
+# File inventory (reproducibility check)
+# --------------------------------------------------------------------------------------------
+
+
+def test_count_table_rows_by_format(tmp_path: Path) -> None:
+    pd.DataFrame({"a": [1, 2, 3]}).to_parquet(tmp_path / "t.parquet")
+    (tmp_path / "t.csv").write_text('a,b\n1,"x\ny"\n2,z\n', encoding="utf-8")
+    (tmp_path / "t.jsonl").write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")
+    (tmp_path / "t.json").write_text('[{"a": 1}]', encoding="utf-8")
+    (tmp_path / "report.json").write_text('{"a": 1}', encoding="utf-8")
+    (tmp_path / "notes.md").write_text("# hi\n", encoding="utf-8")
+    names = sorted(p.name for p in tmp_path.iterdir())
+    counts = {name: io.count_table_rows(tmp_path / name) for name in names}
+    assert counts == {
+        "notes.md": None,
+        "report.json": None,
+        "t.csv": 2,
+        "t.json": 1,
+        "t.jsonl": 2,
+        "t.parquet": 3,
+    }
+
+
+def test_count_table_rows_refuses_a_missing_or_broken_file(tmp_path: Path) -> None:
+    with pytest.raises(TableIOError, match="File not found"):
+        io.count_table_rows(tmp_path / "missing.csv")
+    (tmp_path / "bad.json").write_text("[1,", encoding="utf-8")
+    with pytest.raises(TableIOError, match="Could not read"):
+        io.count_table_rows(tmp_path / "bad.json")
+
+
+def test_describe_files_lists_every_file_recursively_in_path_order(tmp_path: Path) -> None:
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "x.csv").write_text("a\n1\n", encoding="utf-8")
+    (tmp_path / "a.md").write_text("hi", encoding="utf-8")
+    facts = io.describe_files(tmp_path)
+    assert list(facts) == ["a.md", "b/x.csv"]
+    assert facts["b/x.csv"] == {
+        "sha256": io.file_sha256(tmp_path / "b" / "x.csv"),
+        "bytes": 4,
+        "rows": 1,
+    }
+    assert facts["a.md"]["rows"] is None
