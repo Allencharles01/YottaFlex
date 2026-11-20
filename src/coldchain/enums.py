@@ -207,6 +207,7 @@ class FileFormat(StrEnum):
     PARQUET = "parquet"
     CSV = "csv"
     JSON = "json"
+    JSONL = "jsonl"
 
 
 class TableName(StrEnum):
@@ -279,6 +280,29 @@ class DataSource(StrEnum):
 
     RAW = "raw"
     BASELINE = "baseline"
+
+
+class PipelineStage(StrEnum):
+    """A ``coldchain`` command that reads or writes pipeline files, in pipeline order.
+
+    Each stage records a provenance file (``output/<scale>/provenance/<stage>.json``); the
+    export manifest is built from them (DECISIONS.md #98).
+    """
+
+    GENERATE = "generate"
+    INJECT = "inject"
+    CHECK = "check"
+    VALIDATE = "validate"
+    VALIDATE_BASELINE = "validate_baseline"
+    EVALUATE = "evaluate"
+    EXPORT = "export"
+
+
+class SqlEngine(StrEnum):
+    """Database engines the SQL export is proven to load into (``coldchain export``)."""
+
+    DUCKDB = "duckdb"
+    SQLITE = "sqlite"
 
 
 class ReportKind(StrEnum):

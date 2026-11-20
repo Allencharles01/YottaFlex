@@ -22,6 +22,7 @@ from coldchain.enums import (
     ProductCategory,
     Scale,
     Scenario,
+    TableName,
 )
 from coldchain.errors import ConfigError
 from coldchain.schemas import overlapping_policy_versions
@@ -301,6 +302,29 @@ class EvaluationConfig(_StrictModel):
         return self
 
 
+SQLITE_MAX_SQL_LENGTH = 1_000_000
+"""SQLite's default limit on the length of one SQL statement, in bytes."""
+
+
+class ExportConfig(_StrictModel):
+    """How ``coldchain export`` writes the bundle (Phase 7)."""
+
+    sql_batch_rows: int = Field(
+        ge=1, le=5_000, description="Rows per multi-row INSERT statement in the seed files."
+    )
+    sql_gzip_threshold_mb: float = Field(
+        ge=0, description="Also write a .sql.gz copy of a seed file larger than this (MiB)."
+    )
+    jsonl_tables: tuple[TableName, ...] = Field(
+        description="Tables exported as JSON Lines (one record per line) instead of a JSON array."
+    )
+
+    @model_validator(mode="after")
+    def _check_unique(self) -> "ExportConfig":
+        _require_unique("export.jsonl_tables", list(self.jsonl_tables))
+        return self
+
+
 class AppConfig(_StrictModel):
     """Validated top-level configuration."""
 
@@ -315,6 +339,7 @@ class AppConfig(_StrictModel):
     generation: GenerationConfig
     injection: InjectionConfig
     evaluation: EvaluationConfig
+    export: ExportConfig
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "AppConfig":

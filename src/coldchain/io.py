@@ -7,8 +7,8 @@ text representation, so the same data always produces byte-identical files:
 * nulls: an empty CSV field, ``null`` in JSON;
 * floats: Python's shortest round-trip representation (values are already rounded).
 
-Parquet and CSV are written for every table; JSON (an array of records) only where a phase asks
-for it (``ground_truth/anomalies``).
+Parquet and CSV are written for every table; JSON (an array of records) and JSON Lines (one
+record per line) only where a phase asks for it (``ground_truth/anomalies``, the export bundle).
 
 The module also keeps the **baseline snapshot** used by the injector: before the first
 ``coldchain inject``, the generator's clean ``raw/`` tables and ``expected_outcomes`` are copied
@@ -18,8 +18,14 @@ clean data and a diff against the baseline proves which records it changed (DECI
 Reading converts every column back to the exact physical dtype its schema declares
 (``datetime64[us, UTC]``, ``datetime.date``, ``Int64``, ``int64``, ``float64``, ``str``), so a
 written table read back passes its schema and equals the original frame.
+
+Besides tables, this module writes and reads the small JSON documents of the pipeline (reports,
+stage provenance records, the export manifest) and the text files of the export bundle (SQL
+scripts, optionally gzip-compressed with a fixed header so they stay byte-identical).
 """
 
+import csv
+import gzip
 import hashlib
 import json
 import logging
@@ -32,7 +38,7 @@ from typing import Any
 
 import pandas as pd
 
-from coldchain.enums import FileFormat, Layer, ReportKind, TableName
+from coldchain.enums import FileFormat, Layer, PipelineStage, ReportKind, TableName
 from coldchain.errors import TableIOError
 from coldchain.schemas import (
     ISO_TIMESTAMP_FORMAT,
@@ -53,6 +59,14 @@ DEFAULT_FORMATS: tuple[FileFormat, ...] = (FileFormat.PARQUET, FileFormat.CSV)
 
 BASELINE_DIR = "baseline"
 """Sub-folder of ``<root>/<scale>/`` holding the clean pre-injection snapshot."""
+
+PROVENANCE_DIR = "provenance"
+"""Sub-folder of ``<root>/<scale>/`` holding one provenance record per pipeline stage."""
+
+_HASH_BLOCK_BYTES = 1 << 20
+
+EXPORT_DIR = "export"
+"""Sub-folder of ``<root>/<scale>/`` holding the export bundle (``coldchain export``)."""
 
 BASELINE_TABLES: tuple[TableName, ...] = (
     *(t for t, layer in TABLE_LAYERS.items() if layer is Layer.RAW),
@@ -117,6 +131,16 @@ def layer_dir(output_root: Path, scale: str, layer: Layer) -> Path:
 def report_dir(output_root: Path, scale: str, kind: ReportKind) -> Path:
     """Return a report folder, e.g. ``output/starter/validation``."""
     return Path(output_root) / scale / kind.value
+
+
+def provenance_path(output_root: Path, scale: str, name: str) -> Path:
+    """Return a stage's provenance record, e.g. ``output/starter/provenance/check.json``."""
+    return Path(output_root) / scale / PROVENANCE_DIR / f"{name}.{FileFormat.JSON.value}"
+
+
+def export_root(output_root: Path, scale: str) -> Path:
+    """Return the export bundle folder, e.g. ``output/starter/export``."""
+    return Path(output_root) / scale / EXPORT_DIR
 
 
 def baseline_dir(output_root: Path, scale: str, layer: Layer) -> Path:
@@ -195,8 +219,16 @@ def coerce_to_schema(table: TableName, frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _to_text(table: TableName, frame: pd.DataFrame) -> pd.DataFrame:
-    """Render timestamp and date columns in their fixed text form (other columns unchanged)."""
+def to_text(table: TableName, frame: pd.DataFrame) -> pd.DataFrame:
+    """Render timestamp and date columns in their fixed text form (other columns unchanged).
+
+    Args:
+        table: The table the frame belongs to.
+        frame: Frame with the table's schema dtypes.
+
+    Returns:
+        A copy with ``YYYY-MM-DDTHH:MM:SSZ`` timestamps and ``YYYY-MM-DD`` dates as text.
+    """
     text = frame.copy()
     for name, kind in column_kinds(table).items():
         if kind is ColumnKind.TIMESTAMP:
@@ -231,25 +263,48 @@ def write_table(
     Raises:
         SchemaValidationError: If the frame fails its schema (nothing is written).
     """
+    paths = {fmt: table_path(Path(directory), table, fmt) for fmt in formats}
+    write_table_files(table, frame, paths)
+    return paths
+
+
+def write_table_files(
+    table: TableName, frame: pd.DataFrame, paths: Mapping[FileFormat, Path]
+) -> pd.DataFrame:
+    """Validate and sort one table once, then write it to one path per format.
+
+    Unlike :func:`write_table`, the paths may lie in different directories (the export bundle
+    keeps one folder per format).
+
+    Args:
+        table: The table to write.
+        frame: Its rows (any order).
+        paths: Target path per file format (parent directories are created).
+
+    Returns:
+        The validated frame, sorted by primary key.
+
+    Raises:
+        SchemaValidationError: If the frame fails its schema (nothing is written).
+    """
     ordered = sort_by_primary_key(table, frame)
     validate(table, ordered)
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    paths: dict[FileFormat, Path] = {}
-    for fmt in formats:
-        path = table_path(directory, table, fmt)
+    text = to_text(table, ordered) if set(paths) - {FileFormat.PARQUET} else ordered
+    for fmt, path in paths.items():
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if fmt is FileFormat.PARQUET:
             ordered.to_parquet(path, index=False, engine="pyarrow")
         elif fmt is FileFormat.CSV:
-            _to_text(table, ordered).to_csv(
-                path, index=False, na_rep="", lineterminator="\n", encoding="utf-8"
-            )
+            text.to_csv(path, index=False, na_rep="", lineterminator="\n", encoding="utf-8")
+        elif fmt is FileFormat.JSON:
+            body = text.to_json(orient="records", indent=2, force_ascii=False)
+            path.write_text(body + "\n", encoding="utf-8", newline="\n")
         else:
-            text = _to_text(table, ordered).to_json(orient="records", indent=2, force_ascii=False)
-            path.write_text(text + "\n", encoding="utf-8")
-        paths[fmt] = path
-    logger.debug("Wrote %s (%d rows) to %s", table.value, len(ordered), directory)
-    return paths
+            lines = text.to_json(orient="records", lines=True, force_ascii=False).strip("\n")
+            path.write_text(lines + "\n" if lines else "", encoding="utf-8", newline="\n")
+        logger.debug("Wrote %s (%d rows) to %s", table.value, len(ordered), path)
+    return ordered
 
 
 def write_tables(
@@ -330,10 +385,14 @@ def read_table(
             raw = pd.read_csv(
                 path, dtype=str, keep_default_na=False, na_values=[""], encoding="utf-8"
             )
-        else:
+        elif fmt is FileFormat.JSON:
             records = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(records, list):
                 raise ValueError("expected a JSON array of records")
+            raw = pd.DataFrame.from_records(records, columns=list(SCHEMAS[table].columns))
+        else:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            records = [json.loads(line) for line in lines if line]
             raw = pd.DataFrame.from_records(records, columns=list(SCHEMAS[table].columns))
     except (OSError, ValueError) as exc:
         raise TableIOError(f"Could not read {path}: {exc}") from exc
@@ -403,7 +462,7 @@ def baseline_root(output_root: Path, scale: str) -> Path:
 
 
 def clear_injection(output_root: Path, scale: str) -> list[Path]:
-    """Remove the outputs of a previous injection (baseline snapshot and anomalies).
+    """Remove the outputs of a previous injection (baseline snapshot, anomalies, provenance).
 
     Called by ``coldchain generate``: freshly generated data makes an older snapshot and answer
     key stale.
@@ -420,6 +479,10 @@ def clear_injection(output_root: Path, scale: str) -> list[Path]:
     if root.exists():
         shutil.rmtree(root)
         removed.append(root)
+    record = provenance_path(output_root, scale, PipelineStage.INJECT)
+    if record.is_file():
+        record.unlink()
+        removed.append(record)
     truth = layer_dir(output_root, scale, Layer.GROUND_TRUTH)
     for fmt in FileFormat:
         path = table_path(truth, TableName.ANOMALIES, fmt)
@@ -452,8 +515,24 @@ def file_sha256(path: Path) -> str:
     Raises:
         TableIOError: If the file cannot be read.
     """
+    digest = hashlib.sha256()
     try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        with Path(path).open("rb") as stream:
+            for block in iter(lambda: stream.read(_HASH_BLOCK_BYTES), b""):
+                digest.update(block)
+    except OSError as exc:
+        raise TableIOError(f"Could not read {path}: {exc}") from exc
+    return digest.hexdigest()
+
+
+def file_size(path: Path) -> int:
+    """Return a file's size in bytes.
+
+    Raises:
+        TableIOError: If the file does not exist.
+    """
+    try:
+        return Path(path).stat().st_size
     except OSError as exc:
         raise TableIOError(f"Could not read {path}: {exc}") from exc
 
@@ -475,8 +554,7 @@ def write_report(
     md_path, json_path = report_paths(directory, stem)
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(markdown, encoding="utf-8", newline="\n")
-    text = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)
-    json_path.write_text(text + "\n", encoding="utf-8", newline="\n")
+    write_json(json_path, payload)
     logger.debug("Wrote report %s to %s", stem, md_path.parent)
     return md_path, json_path
 
@@ -496,6 +574,40 @@ def read_report(directory: Path, stem: str) -> dict[str, Any]:
     _, path = report_paths(directory, stem)
     if not path.is_file():
         raise TableIOError(f"Report not found: {path}")
+    return read_json(path)
+
+
+# --------------------------------------------------------------------------------------------
+# JSON documents and text files (provenance records, export bundle)
+# --------------------------------------------------------------------------------------------
+
+
+def write_json(path: Path, payload: Mapping[str, Any]) -> Path:
+    """Write a JSON object: 2-space indent, UTF-8, LF line endings, keys in their given order.
+
+    Args:
+        path: Target file (parent directories are created).
+        payload: JSON-serialisable mapping (``NaN`` and infinities are rejected).
+
+    Returns:
+        The written path.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)
+    path.write_text(text + "\n", encoding="utf-8", newline="\n")
+    return path
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    """Read a JSON object.
+
+    Raises:
+        TableIOError: If the file is missing, unreadable or is not a JSON object.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise TableIOError(f"File not found: {path}")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -503,3 +615,100 @@ def read_report(directory: Path, stem: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TableIOError(f"{path}: expected a JSON object")
     return payload
+
+
+def write_text(path: Path, chunks: Iterable[str], *, compress: bool = False) -> Path:
+    """Stream text chunks to a UTF-8 file with LF line endings, optionally gzip-compressed.
+
+    The gzip header carries no file name and a zero modification time, so the same text always
+    gives the same compressed bytes.
+
+    Args:
+        path: Target file (parent directories are created).
+        chunks: Text pieces, written in order without separators.
+        compress: Write gzip-compressed bytes instead of plain text.
+
+    Returns:
+        The written path.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as raw:
+        if compress:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as stream:
+                for chunk in chunks:
+                    stream.write(chunk.encode("utf-8"))
+        else:
+            for chunk in chunks:
+                raw.write(chunk.encode("utf-8"))
+    return path
+
+
+def read_text_lines(path: Path) -> Iterable[str]:
+    r"""Yield the lines of a UTF-8 text file (gzip-compressed when its suffix is ``.gz``).
+
+    Lines keep their ``\n``; the file is streamed, never loaded whole.
+
+    Raises:
+        TableIOError: If the file is missing.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise TableIOError(f"File not found: {path}")
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8", newline="\n") as stream:
+        yield from stream
+
+
+def copy_file(source: Path, target: Path) -> Path:
+    """Copy a file byte for byte, creating the target's parent directories.
+
+    Raises:
+        TableIOError: If the source does not exist.
+    """
+    if not Path(source).is_file():
+        raise TableIOError(f"File not found: {source}")
+    Path(target).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    return Path(target)
+
+
+def count_csv_rows(path: Path) -> int:
+    """Count the data rows of a CSV file (header excluded), honouring quoted fields.
+
+    Raises:
+        TableIOError: If the file is missing or empty (no header).
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise TableIOError(f"File not found: {path}")
+    with path.open(encoding="utf-8", newline="") as stream:
+        rows = sum(1 for _ in csv.reader(stream))
+    if rows == 0:
+        raise TableIOError(f"{path}: empty CSV (no header)")
+    return rows - 1
+
+
+def replace_directory(staging: Path, target: Path) -> Path:
+    """Replace ``target`` with the finished ``staging`` directory (same parent folder).
+
+    Used so a failed export never leaves a half-written bundle behind.
+
+    Args:
+        staging: The completely written directory.
+        target: The directory it replaces (removed first if it exists).
+
+    Returns:
+        The target path.
+    """
+    target = Path(target)
+    if target.exists():
+        shutil.rmtree(target)
+    Path(staging).rename(target)
+    return target
+
+
+def remove_directory(path: Path) -> None:
+    """Remove a directory tree if it exists (e.g. a stale export staging folder)."""
+    if Path(path).exists():
+        shutil.rmtree(path)

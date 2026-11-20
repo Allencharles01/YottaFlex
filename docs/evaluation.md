@@ -271,3 +271,4 @@ The pipeline order is therefore `generate → inject → check → validate → 
 | starter, injected (CLI) | 0 integrity findings; 84 business-rule findings on 4 shipments | PASS: every metric 100 %, 84/84 findings explained, **unexplained 0**, 4/4 anomalies surfaced, 50/50 shipments fully correct |
 | full, baseline + engine (in memory) | 133 PASS, **0 findings** (1,163,109 readings) | — |
 | full, injected (in memory) | 0 integrity findings; 13,160 business-rule findings on 200 shipments | PASS: 5,000/5,000 shipments fully correct, every metric 100 %, 13,160/13,160 findings explained, 200/200 anomalies surfaced |
+| full, injected (CLI, on disk, Phase 7) | 0 integrity findings; 13,160 business-rule findings on 200 shipments (1,162,819 readings) | PASS (strict, DECISIONS #95): 5,000/5,000 shipments fully correct, every metric 100 %, 13,160/13,160 findings explained, unexplained 0, 200/200 anomalies surfaced; P/R = 1.0 for all 5 issue types |

@@ -47,3 +47,11 @@ class ValidationError(ColdchainError):
 
 class EvaluationError(ColdchainError):
     """Raised when the evaluation cannot run (missing inputs, or a stale validation summary)."""
+
+
+class ExportError(ColdchainError):
+    """Raised when the export cannot be written or proved (stale inputs, SQL that fails to load)."""
+
+
+class ProvenanceError(ColdchainError):
+    """Raised when stage provenance is missing or no longer matches the files (stale pipeline)."""

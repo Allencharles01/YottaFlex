@@ -20,6 +20,7 @@ types or required flags.
 | Layers | `raw` = generator/injector input (never contains labels) · `compliance` = engine output · `ground_truth` = answer key (never read by the engine). `baseline/{raw,ground_truth}` = byte-for-byte snapshot of the generator's clean `raw/` tables and `expected_outcomes`, taken before the first injection (not a table layer; never read by the engine). |
 | Ordering | Every table is sorted by its primary key before it is written. |
 | Reports | `validation/validation_summary.{md,json}` (`validation/baseline/` for the snapshot) and `evaluation/evaluation_report.{md,json}` are reports, not tables: Markdown for people, JSON for tools, no wall-clock time, byte-identical on a rerun (see `evaluation.md`). |
+| Provenance and export | `provenance/<stage>.json` (one record per command) and `export/` (the audit bundle with `manifest.json`) are not table layers either; see [Export bundle](#export-bundle-coldchain-export) below. |
 
 **Where each rule is enforced** (tag at the start of each rule):
 **S** = pandera schema (`schemas.py`, single table) · **V** = validation suite (`coldchain
@@ -436,3 +437,54 @@ the shipment in UNDER_REVIEW (no further event: it waits for a human).
 
 **Threshold policy:** a version is *effective* inside its window and *superseded* afterwards
 (derived from the effective dates, not stored).
+
+## Export bundle (`coldchain export`)
+
+`coldchain export` writes every table of this dictionary to `output/<scale>/export/`, keeping
+each layer in its own folder. The answer key never shares a folder or an SQL file with the
+input data. Decisions: DECISIONS.md #97–#105.
+
+| Path | Content |
+|---|---|
+| `csv/<layer>/<table>.csv` | Every table, byte-identical to the pipeline's CSV (conventions above). |
+| `json/<layer>/<table>.json` | A JSON array of records; timestamps and dates as in the CSV, nulls as `null`. |
+| `json/<layer>/<table>.jsonl` | JSON Lines (one record per line) for the tables in `export.jsonl_tables` (default: `temperature_readings`), instead of an array. |
+| `sql/schema.sql`, `sql/seed.sql` | DDL and rows of the 13 raw and 4 compliance tables. |
+| `sql/ground_truth_schema.sql`, `sql/ground_truth_seed.sql` | DDL and rows of the 3 ground-truth tables (their FKs point into the raw tables, so load them after the first pair). |
+| `sql/<seed>.sql.gz` | gzip copy of a seed file larger than `export.sql_gzip_threshold_mb` (200 MiB). |
+| `reports/` | `validation_summary.{md,json}` and `evaluation_report.{md,json}` of the exported data. |
+| `docs/data_dictionary.md` | This document. |
+| `README.md` | What each folder holds, row counts, and how to load the SQL. |
+| `manifest.json` | Provenance and checksums, below. |
+
+**SQL mapping.** Column types: string → `VARCHAR`, integer → `BIGINT`, float → `DOUBLE
+PRECISION`, date → `DATE`, timestamp → `TIMESTAMP WITH TIME ZONE` (SQLite stores the ISO-8601
+text). Required columns are `NOT NULL`. Every table declares its primary key, a `UNIQUE`
+constraint per unique column, and a `FOREIGN KEY` for each relationship in the cardinality
+table above. Logical references (`products.policy_code`, `|`-lists of IDs) are not declared.
+Values are SQL literals: text in single quotes with `'` doubled, `NULL` for nulls, bare
+numbers. Each seed file is one transaction of multi-row INSERTs (`export.sql_batch_rows` rows
+each), in foreign-key dependency order. SQLite enforces foreign keys only after
+`PRAGMA foreign_keys = ON;`.
+
+**`manifest.json`.** It holds:
+- the run: `scale`, `seed` (the generator's), the `export` `command`, `package` version,
+  `git` (`commit`, `dirty`) and `config`: the hash of the validated pipeline settings (without
+  `export:` and `seed`), the hash of each reference file, and their combined hash;
+- `export_settings`: the `export:` values with their own hash. Changing them never makes the
+  pipeline stale (DECISIONS.md #108);
+- `pipeline`: each stage's command, seed, version, commit and config hash, from its provenance
+  record;
+- `inputs`: the sha256 of every pipeline file read;
+- `files`: one entry per bundle file, with `path`, `kind`, `layer`, `table`, `rows`, `bytes`
+  and `sha256`;
+- `totals` and `sql` (settings, load order and the DuckDB/SQLite load proof);
+- two hashes. `dataset_sha256` covers only the exported files. `content_sha256` covers
+  everything except the `run` block, which holds `generated_at`, the only wall-clock value.
+
+**Provenance records** (`output/<scale>/provenance/<stage>.json`, one per command: `generate`,
+`inject`, `check`, `validate`, `validate_baseline`, `evaluate`, `export`). Each holds
+`provenance_version`, `stage`, `command`, `scale`, `seed` (null for stages without randomness),
+`package_version`, `git`, `config`, and the sha256 of every file read (`inputs`) and written
+(`outputs`), keyed by path relative to the output root. There is no wall-clock time. `export`
+refuses to run unless this chain still matches the files on disk.

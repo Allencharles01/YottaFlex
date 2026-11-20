@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from coldchain.config import DEFAULT_CONFIG_PATH, AppConfig, load_config, parse_config
-from coldchain.enums import IssueType, Scale, Scenario
+from coldchain.enums import IssueType, Scale, Scenario, TableName
 from coldchain.errors import ConfigError
 
 
@@ -279,3 +279,37 @@ def test_negative_weight_rejected(raw_config: dict) -> None:
 def test_unknown_scale_lookup_raises() -> None:
     with pytest.raises(ConfigError, match="Unknown scale 'huge'"):
         load_config().scale("huge")
+
+
+# --------------------------------------------------------------------------------------------
+# export section (Phase 7)
+# --------------------------------------------------------------------------------------------
+
+
+def test_export_defaults(raw_config) -> None:
+    config = parse_config(raw_config)
+    assert config.export.sql_batch_rows == 500
+    assert config.export.sql_gzip_threshold_mb == 200
+    assert config.export.jsonl_tables == (TableName.TEMPERATURE_READINGS,)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("sql_batch_rows", 0, "sql_batch_rows"),
+        ("sql_batch_rows", 5001, "sql_batch_rows"),
+        ("sql_gzip_threshold_mb", -1, "sql_gzip_threshold_mb"),
+        ("jsonl_tables", ["temperature_readings", "temperature_readings"], "duplicate"),
+        ("jsonl_tables", ["no_such_table"], "jsonl_tables"),
+    ],
+)
+def test_invalid_export_settings_are_rejected(raw_config, field, value, message) -> None:
+    raw_config["export"][field] = value
+    with pytest.raises(ConfigError, match=message):
+        parse_config(raw_config)
+
+
+def test_export_section_is_required(raw_config) -> None:
+    del raw_config["export"]
+    with pytest.raises(ConfigError, match="export"):
+        parse_config(raw_config)

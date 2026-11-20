@@ -77,3 +77,9 @@ evaluation:
   # must be 100 %, otherwise `evaluate` exits non-zero. Unexplained validation findings fail
   # the run at every scale. Full is strict too (Phase 6 approval, DECISIONS #95).
   strict_scales: [starter, full]
+
+# Export bundle (Phase 7, `coldchain export`). Validated on load by coldchain.config.
+export:
+  sql_batch_rows: 500               # rows per multi-row INSERT (each statement stays < 1 MB for SQLite)
+  sql_gzip_threshold_mb: 200        # a seed .sql file larger than this also gets a .sql.gz copy
+  jsonl_tables: [temperature_readings]   # exported as JSON Lines; every other table as a JSON array

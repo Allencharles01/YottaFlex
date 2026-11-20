@@ -212,10 +212,97 @@ def test_clear_injection_removes_snapshot_and_anomalies_only(tmp_path: Path, val
     truth = io.layer_dir(tmp_path, "starter", Layer.GROUND_TRUTH)
     io.write_table(TableName.ANOMALIES, valid_tables[TableName.ANOMALIES], truth, list(FileFormat))
     removed = io.clear_injection(tmp_path, "starter")
-    assert len(removed) == 4  # the snapshot folder + anomalies.{parquet,csv,json}
+    assert len(removed) == 1 + len(FileFormat)  # the snapshot folder + anomalies in every format
     assert not io.baseline_root(tmp_path, "starter").exists()
     assert sorted(p.name for p in truth.iterdir()) == [
         "expected_outcomes.csv",
         "expected_outcomes.parquet",
     ]
     assert io.clear_injection(tmp_path, "starter") == []
+
+
+# --------------------------------------------------------------------------------------------
+# Phase 7: multi-destination writes, text files, gzip, CSV row counts, directory swap
+# --------------------------------------------------------------------------------------------
+
+
+def test_write_table_files_matches_write_table_bytes(tmp_path: Path, valid_tables) -> None:
+    table = TableName.TEMPERATURE_READINGS
+    frame = valid_tables[table]
+    io.write_table(table, frame, tmp_path / "one", [FileFormat.CSV, FileFormat.JSONL])
+    paths = {
+        FileFormat.CSV: tmp_path / "csv" / "x" / "readings.csv",
+        FileFormat.JSONL: tmp_path / "json" / "readings.jsonl",
+    }
+    ordered = io.write_table_files(table, frame.iloc[::-1], paths)
+    assert ordered["reading_id"].is_monotonic_increasing
+    for fmt, path in paths.items():
+        assert path.read_bytes() == io.table_path(tmp_path / "one", table, fmt).read_bytes()
+
+
+def test_jsonl_has_one_record_per_line(tmp_path: Path, valid_tables) -> None:
+    table = TableName.TEMPERATURE_READINGS
+    io.write_table(table, valid_tables[table], tmp_path, [FileFormat.JSONL])
+    lines = (tmp_path / f"{table.value}.jsonl").read_text(encoding="utf-8").split("\n")
+    assert lines[-1] == "" and len(lines) - 1 == len(valid_tables[table])
+    assert lines[0].startswith('{"reading_id":"TEMP-') and '"recorded_at":"2026-' in lines[0]
+
+
+def test_empty_jsonl_file_is_empty(tmp_path: Path, valid_tables) -> None:
+    table = TableName.TEMPERATURE_READINGS
+    io.write_table(table, valid_tables[table].iloc[0:0], tmp_path, [FileFormat.JSONL])
+    assert (tmp_path / f"{table.value}.jsonl").read_bytes() == b""
+
+
+def test_write_text_gzip_is_deterministic_and_reads_back(tmp_path: Path) -> None:
+    chunks = ["line one;\n", "Zürich 東京\n", "last\n"]
+    first = io.write_text(tmp_path / "a.sql.gz", chunks, compress=True)
+    second = io.write_text(tmp_path / "b.sql.gz", chunks, compress=True)
+    assert first.read_bytes() == second.read_bytes()
+    assert list(io.read_text_lines(first)) == chunks
+    plain = io.write_text(tmp_path / "c.sql", chunks)
+    assert list(io.read_text_lines(plain)) == chunks
+
+
+def test_count_csv_rows_honours_quoted_newlines(tmp_path: Path) -> None:
+    path = tmp_path / "t.csv"
+    path.write_text('a,b\n1,"two\nlines"\n3,4\n', encoding="utf-8")
+    assert io.count_csv_rows(path) == 2
+    (tmp_path / "empty.csv").write_text("", encoding="utf-8")
+    with pytest.raises(TableIOError, match="empty CSV"):
+        io.count_csv_rows(tmp_path / "empty.csv")
+
+
+def test_replace_directory_swaps_in_the_finished_folder(tmp_path: Path) -> None:
+    target, staging = tmp_path / "export", tmp_path / "export.partial"
+    (target / "old").mkdir(parents=True)
+    (staging / "new").mkdir(parents=True)
+    io.replace_directory(staging, target)
+    assert (target / "new").is_dir() and not (target / "old").exists() and not staging.exists()
+    io.remove_directory(staging)  # absent: no error
+
+
+def test_json_documents_round_trip(tmp_path: Path) -> None:
+    payload = {"b": 1, "a": ["é", None]}
+    path = io.write_json(tmp_path / "x" / "doc.json", payload)
+    assert io.read_json(path) == payload
+    assert path.read_text(encoding="utf-8").startswith('{\n  "b": 1')
+    (tmp_path / "list.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(TableIOError, match="JSON object"):
+        io.read_json(tmp_path / "list.json")
+
+
+def test_file_sha256_streams_large_files(tmp_path: Path) -> None:
+    import hashlib
+
+    data = b"x" * (3 * 1024 * 1024 + 7)
+    (tmp_path / "big").write_bytes(data)
+    assert io.file_sha256(tmp_path / "big") == hashlib.sha256(data).hexdigest()
+    assert io.file_size(tmp_path / "big") == len(data)
+
+
+def test_clear_injection_removes_the_inject_provenance(tmp_path: Path) -> None:
+    record = io.provenance_path(tmp_path, "starter", "inject")
+    io.write_json(record, {"stage": "inject"})
+    assert record in io.clear_injection(tmp_path, "starter")
+    assert not record.exists()
